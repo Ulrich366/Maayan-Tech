@@ -1,7 +1,10 @@
 [TITLE]
 Douala Water Distribution Network
-CAMWATER - Maayan Leak Detection MVP
+Maayan Leak Detection Simulation
 Simulated network representing Douala city zones
+Open this file directly in EPANET 2.2 to inspect or modify the network.
+Any change you save here is picked up live by the running Maayan backend
+(no restart required) on its next simulation tick.
 
 [JUNCTIONS]
 ;ID              	Elev        	Demand      	Pattern         

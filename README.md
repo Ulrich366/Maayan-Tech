@@ -1,8 +1,8 @@
 # Maayan — Intelligent Water Leak Detection System
 
-> **CAMWATER × Smart Infrastructure** · MVP v1.0
+> **Smart Water Infrastructure** · MVP v1.0 · © 2026
 
-A real-time intelligent water network monitoring and leak detection platform built for Cameroon Water Utilities Corporation (CAMWATER), powered by EPANET hydraulic simulation, Machine Learning, and LLM-powered analysis.
+A real-time intelligent water network monitoring and leak detection platform for municipal water utility operators, powered by EPANET hydraulic simulation, Machine Learning, and LLM-powered analysis.
 
 ---
 
@@ -18,7 +18,18 @@ A real-time intelligent water network monitoring and leak detection platform bui
 
 ## Live Data — What's Real vs. What Needs a Resource From You
 
-This MVP runs on **genuine EPANET 2.2 hydraulics**, not mock/random numbers. Every pressure, flow, and head value comes from an actual solve of the compiled EPANET toolkit (via WNTR) against `simulation/douala_network.inp`. Nothing is invented client-side. The dashboard header always shows a badge — **"Real EPANET 2.2"** (cyan) or **"Synthetic Fallback"** (amber) — so it's never ambiguous which mode produced the data.
+This MVP runs on **genuine EPANET 2.2 hydraulics**, not mock/random numbers. Every pressure, flow, and head value comes from an actual solve of the compiled EPANET toolkit (via WNTR) against a real `.inp` network file. Nothing is invented client-side. The dashboard header always shows a badge — **"Real EPANET 2.2"** (cyan) or **"Synthetic Fallback"** (amber) — so it's never ambiguous which mode produced the data.
+
+### Two simulated municipalities, switchable live
+
+Two independent EPANET networks ship out of the box, selectable from the dashboard header or Settings page (`POST /api/networks/select {"city": "bafoussam"}`):
+
+| City | File | Notes |
+|---|---|---|
+| Douala (Littoral Region) | `simulation/douala_network.inp` | Coastal network, elevations 36–55m |
+| Bafoussam (West Region, Mifi Department) | `simulation/bafoussam_network.inp` | Highland-plateau network, elevations ~1500m, real Bafoussam quarter names (Tamdja, Kamkop, Djeleng, Tougang, Famla, Banengo, Ndiengdam, Kouogouo, Nylon, Zone Industrielle, Kaptchou, Kouekong) |
+
+**Edit either `.inp` file directly in EPANET Desktop and save — your changes (pipe diameters, node elevations, positions, demands, roughness, etc.) reflect on the live dashboard within one simulation tick (~2s), no backend restart required.** The backend watches the active file's modification time every tick and hot-reloads it automatically. This only applies to a locally-running backend reading from your local filesystem — a Railway/cloud deployment serves its own uploaded copy of the file and won't see edits made on your machine.
 
 | Layer | Status out of the box | What it needs from you |
 |---|---|---|
@@ -155,7 +166,8 @@ MAAYAN/
 │   └── package.json
 │
 ├── simulation/
-│   ├── douala_network.inp       # EPANET network definition
+│   ├── douala_network.inp       # EPANET network definition — Douala
+│   ├── bafoussam_network.inp    # EPANET network definition — Bafoussam
 │   └── scenarios/               # Scenario configuration files
 │
 └── data/
@@ -178,12 +190,16 @@ MAAYAN/
 | GET | `/api/leaks` | Run leak detection analysis |
 | GET | `/api/leaks/latest` | Last detection result |
 | POST | `/api/scenario` | Change simulation scenario |
+| GET | `/api/networks` | List available city networks + active one |
+| POST | `/api/networks/select` | Switch active city network (`{"city": "bafoussam"}`) |
 | GET | `/api/report?language=en` | Generate AI report (GET) |
 | POST | `/api/report` | Generate AI report (POST with context) |
 | GET | `/api/history` | Event history |
 | DELETE | `/api/history` | Clear history |
 | GET | `/api/status` | System status |
 | GET | `/api/iot/nodes` | IoT sensor node registry |
+| GET | `/api/iot/status` | IoT ingest connection status |
+| POST | `/api/iot/telemetry` | Ingest live sensor reading (Phase 2) |
 | WS | `/ws` | Real-time WebSocket feed |
 
 ### Example Requests
@@ -294,7 +310,7 @@ Hardware per node:
 | `OPENAI_API_KEY` | (empty) | OpenAI API key for LLM reports (paid fallback if no Groq key) |
 | `OPENAI_MODEL` | `gpt-4o-mini` | GPT model to use |
 | `DATABASE_URL` | `sqlite:///./maayan.db` | Database connection string |
-| `EPANET_INP_FILE` | `simulation/douala_network.inp` | Network file path |
+| `DEFAULT_CITY` | `douala` | Which simulated network loads at startup (`douala` or `bafoussam`); switchable live afterwards via `/api/networks/select` |
 | `SIMULATION_INTERVAL_SECONDS` | `2.0` | WebSocket broadcast interval |
 | `CORS_ORIGINS` | `localhost:3000,localhost:5173` | Allowed CORS origins |
 | `APP_PORT` | `8000` | Backend port |
@@ -341,7 +357,7 @@ Hardware per node:
 
 ### Phase 3 (Scale)
 - [ ] PostgreSQL + TimescaleDB
-- [ ] Multi-city support
+- [x] Multi-city support (Douala + Bafoussam, live-switchable, live-editable in EPANET Desktop)
 - [ ] Predictive maintenance AI
 - [ ] GIS map integration
 - [ ] SCADA system integration
@@ -350,8 +366,8 @@ Hardware per node:
 
 ## License
 
-Proprietary — CAMWATER × Maayan Water Intelligence
+Proprietary — Maayan Water Intelligence
 
 ---
 
-*Built for CAMWATER · Developed with EPANET, FastAPI, React, and OpenAI*
+*Developed with EPANET, FastAPI, React, Groq, and OpenAI*

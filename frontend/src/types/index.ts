@@ -37,16 +37,41 @@ export interface PipeState {
   status: 'normal' | 'warning' | 'leak' | 'burst'
 }
 
+export interface InfrastructureNode {
+  id: string
+  label: string
+  x: number
+  y: number
+  type: 'reservoir' | 'tank'
+}
+
 export interface NetworkSnapshot {
   timestamp: number
   scenario: Scenario
   engine: 'epanet' | 'synthetic'
+  city: string
+  city_label: string
+  title: string
+  infrastructure: InfrastructureNode[]
   nodes: NodeState[]
   pipes: PipeState[]
   total_demand: number
   total_leakage: number
   system_health: number
   simulation_time: number
+}
+
+// ── Networks (simulated cities) ───────────────────────────────────────────────
+
+export interface NetworkOption {
+  id: string
+  label: string
+  inp_file: string
+}
+
+export interface NetworkListResponse {
+  active: string
+  networks: NetworkOption[]
 }
 
 // ── Leak Detection ────────────────────────────────────────────────────────────
@@ -70,7 +95,7 @@ export interface LeakReport {
 // ── WebSocket Messages ────────────────────────────────────────────────────────
 
 export interface WsMessage {
-  type: 'network_update' | 'connected' | 'heartbeat' | 'scenario_changed' | 'error'
+  type: 'network_update' | 'connected' | 'heartbeat' | 'scenario_changed' | 'network_changed' | 'error'
   tick?: number
   timestamp?: number
   network?: NetworkSnapshot
@@ -78,6 +103,8 @@ export interface WsMessage {
   system?: SystemStatus
   message?: string
   scenario?: string
+  city?: string
+  success?: boolean
 }
 
 export interface SystemStatus {

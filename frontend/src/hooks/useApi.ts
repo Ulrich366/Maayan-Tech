@@ -3,7 +3,7 @@
  */
 
 import { useState, useCallback } from 'react'
-import { Scenario, Language, ReportResponse, HistoryResponse } from '../types'
+import { Scenario, Language, ReportResponse, HistoryResponse, NetworkListResponse } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL}/api`
@@ -41,6 +41,40 @@ export function useScenario() {
   }, [])
 
   return { setScenario, loading, error }
+}
+
+export function useNetworks() {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [networks, setNetworks] = useState<NetworkListResponse | null>(null)
+
+  const fetchNetworks = useCallback(async () => {
+    try {
+      const data = await apiFetch<NetworkListResponse>('/networks')
+      setNetworks(data)
+      return data
+    } catch (e) {
+      console.error('Networks fetch error:', e)
+      return null
+    }
+  }, [])
+
+  const selectNetwork = useCallback(async (city: string) => {
+    setLoading(true)
+    setError(null)
+    try {
+      await apiFetch('/networks/select', {
+        method: 'POST',
+        body: JSON.stringify({ city }),
+      })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to switch network')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  return { fetchNetworks, selectNetwork, networks, loading, error }
 }
 
 export function useReport() {
@@ -100,12 +134,14 @@ export function useHistory() {
 export function useIoTNodes() {
   const [loading, setLoading] = useState(false)
   const [nodes, setNodes] = useState<unknown[]>([])
+  const [liveCount, setLiveCount] = useState(0)
 
   const fetchNodes = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await apiFetch<{ nodes: unknown[] }>('/iot/nodes')
+      const data = await apiFetch<{ nodes: unknown[]; live_count?: number }>('/iot/nodes')
       setNodes(data.nodes)
+      setLiveCount(data.live_count ?? 0)
     } catch (e) {
       console.error('IoT nodes error:', e)
     } finally {
@@ -113,5 +149,5 @@ export function useIoTNodes() {
     }
   }, [])
 
-  return { fetchNodes, nodes, loading }
+  return { fetchNodes, nodes, liveCount, loading }
 }

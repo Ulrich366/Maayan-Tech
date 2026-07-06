@@ -2,10 +2,16 @@
 EPANET Hydraulic Simulation Engine for Maayan.
 
 Wraps WNTR (Water Network Tool for Resilience) to run REAL EPANET 2.2
-hydraulic solves against the Douala .inp network file. Every tick performs
+hydraulic solves against a selectable city .inp network file (Douala or
+Bafoussam by default — see NETWORKS registry below). Every tick performs
 an actual instantaneous hydraulic solve via the compiled EPANET toolkit
 (wntr.sim.EpanetSimulator) — pressures, flows, and heads are genuine
 solver output, not synthetic/random values.
+
+The active .inp file is watched for changes: if you open it in EPANET
+Desktop, edit it (elevations, pipe diameters/roughness, node positions,
+demands...), and save, the next simulation tick automatically reloads it
+and the dashboard reflects your edits live — no backend restart needed.
 
 A synthetic fallback model exists ONLY for environments where WNTR/EPANET
 cannot be installed (e.g. missing build toolchain). It is clearly flagged
@@ -27,7 +33,7 @@ import uuid
 import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from loguru import logger
 
 try:
@@ -84,6 +90,10 @@ class NetworkSnapshot:
     system_health: float
     simulation_time: float
     engine: str = "epanet"  # "epanet" (real) or "synthetic" (fallback)
+    city: str = "douala"
+    city_label: str = ""
+    title: str = ""
+    infrastructure: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class DoualaNeworkDefinition:
@@ -138,6 +148,103 @@ class DoualaNeworkDefinition:
         "J9": 1.65, "J10": 1.93, "J11": 2.42, "J12": 2.78,
     }
 
+    TITLE = "DOUALA WATER DISTRIBUTION NETWORK"
+
+    INFRASTRUCTURE = [
+        {"id": "R1", "label": "Reservoir\nBassa",  "x": 200, "y": 500, "type": "reservoir"},
+        {"id": "R2", "label": "Reservoir\nJapoma",  "x": 200, "y": 650, "type": "reservoir"},
+        {"id": "T1", "label": "Tank\nAkwa",         "x": 300, "y": 350, "type": "tank"},
+    ]
+
+
+class BafoussamNetworkDefinition:
+    """
+    Static metadata for a second simulated city — Bafoussam (Mifi Department,
+    West Region of Cameroon) — used for display purposes only (names, map
+    coordinates). Hydraulic values always come from the real .inp file via
+    WNTR — this class does NOT define pressures.
+
+    Topology (node/pipe IDs, pipe diameters/lengths/roughness, demands) is
+    intentionally identical to the Douala network so the existing leak
+    detection thresholds and trained ML models — which were calibrated
+    against real EPANET solves at these exact pressure magnitudes — remain
+    valid without retraining. Elevations are uniformly shifted by +1500 m to
+    reflect Bafoussam's real highland-plateau altitude (~1500 m); since the
+    reservoir/tank heads are shifted by the same constant, computed pressures
+    (head − elevation) are physically identical to Douala's.
+    """
+
+    NODES = {
+        "J1":  {"name": "Tamdja",           "elev": 1550, "demand": 2.5, "x": 400,  "y": 500},
+        "J2":  {"name": "Kamkop",           "elev": 1548, "demand": 3.0, "x": 600,  "y": 500},
+        "J3":  {"name": "Djeleng",          "elev": 1545, "demand": 2.8, "x": 800,  "y": 450},
+        "J4":  {"name": "Tougang",          "elev": 1543, "demand": 3.5, "x": 1000, "y": 400},
+        "J5":  {"name": "Famla",            "elev": 1542, "demand": 2.2, "x": 900,  "y": 600},
+        "J6":  {"name": "Banengo",          "elev": 1540, "demand": 3.1, "x": 700,  "y": 650},
+        "J7":  {"name": "Ndiengdam",        "elev": 1538, "demand": 2.9, "x": 500,  "y": 650},
+        "J8":  {"name": "Kouogouo",         "elev": 1536, "demand": 2.4, "x": 300,  "y": 600},
+        "J9":  {"name": "Nylon",            "elev": 1555, "demand": 1.8, "x": 400,  "y": 350},
+        "J10": {"name": "Zone Industrielle","elev": 1552, "demand": 2.1, "x": 600,  "y": 300},
+        "J11": {"name": "Kaptchou",         "elev": 1547, "demand": 2.7, "x": 800,  "y": 350},
+        "J12": {"name": "Kouekong",         "elev": 1544, "demand": 1.9, "x": 500,  "y": 200},
+    }
+
+    PIPES = {
+        "P1":  {"from": "R1",  "to": "J1",  "length": 800, "diameter": 0.300},
+        "P2":  {"from": "J1",  "to": "J2",  "length": 600, "diameter": 0.250},
+        "P3":  {"from": "J2",  "to": "J3",  "length": 700, "diameter": 0.200},
+        "P4":  {"from": "J3",  "to": "J4",  "length": 900, "diameter": 0.200},
+        "P5":  {"from": "J4",  "to": "J5",  "length": 800, "diameter": 0.150},
+        "P6":  {"from": "J5",  "to": "J6",  "length": 600, "diameter": 0.150},
+        "P7":  {"from": "J6",  "to": "J7",  "length": 500, "diameter": 0.150},
+        "P8":  {"from": "J7",  "to": "J8",  "length": 700, "diameter": 0.125},
+        "P9":  {"from": "J1",  "to": "J9",  "length": 550, "diameter": 0.200},
+        "P10": {"from": "J9",  "to": "J10", "length": 650, "diameter": 0.175},
+        "P11": {"from": "J10", "to": "J11", "length": 600, "diameter": 0.150},
+        "P12": {"from": "J11", "to": "J12", "length": 700, "diameter": 0.125},
+        "P13": {"from": "J2",  "to": "J10", "length": 800, "diameter": 0.150},
+        "P14": {"from": "J3",  "to": "J11", "length": 750, "diameter": 0.150},
+        "P15": {"from": "R2",  "to": "J8",  "length": 900, "diameter": 0.200},
+        "P16": {"from": "J8",  "to": "J12", "length": 600, "diameter": 0.125},
+        "P17": {"from": "T1",  "to": "J1",  "length": 200, "diameter": 0.300},
+        "P18": {"from": "J5",  "to": "J11", "length": 650, "diameter": 0.150},
+    }
+
+    # Same physical drops as Douala (see above) — elevation shift cancels out
+    # in head − elevation, so fallback estimates are numerically identical.
+    FALLBACK_BASELINE_PRESSURES = {
+        "J1": 2.15, "J2": 2.31, "J3": 2.55, "J4": 2.80,
+        "J5": 2.90, "J6": 3.09, "J7": 3.31, "J8": 3.70,
+        "J9": 1.65, "J10": 1.93, "J11": 2.42, "J12": 2.78,
+    }
+
+    TITLE = "BAFOUSSAM WATER DISTRIBUTION NETWORK"
+
+    INFRASTRUCTURE = [
+        {"id": "R1", "label": "Reservoir\nMifi",       "x": 200, "y": 500, "type": "reservoir"},
+        {"id": "R2", "label": "Reservoir\nKouoptamo",  "x": 200, "y": 650, "type": "reservoir"},
+        {"id": "T1", "label": "Tank\nTamdja",           "x": 300, "y": 350, "type": "tank"},
+    ]
+
+
+# Registry of all simulated city networks. Add a new entry here (plus a
+# matching *NetworkDefinition class and .inp file under simulation/) to
+# plug in another municipality.
+NETWORKS = {
+    "douala": {
+        "inp": "simulation/douala_network.inp",
+        "definition": DoualaNeworkDefinition,
+        "label": "Douala, Littoral Region",
+    },
+    "bafoussam": {
+        "inp": "simulation/bafoussam_network.inp",
+        "definition": BafoussamNetworkDefinition,
+        "label": "Bafoussam, West Region",
+    },
+}
+
+DEFAULT_CITY = "douala"
+
 
 class EpanetSimulator:
     """
@@ -164,19 +271,41 @@ class EpanetSimulator:
     # imperfect physical sensors on top of the real hydraulics.
     SENSOR_NOISE_STD_BAR = float(os.getenv("SENSOR_NOISE_STD_BAR", "0.0"))
 
-    def __init__(self, inp_file: str = "simulation/douala_network.inp"):
-        self.inp_file = inp_file
+    def __init__(self, city: str = DEFAULT_CITY, inp_file: Optional[str] = None):
+        self.city = city if city in NETWORKS else DEFAULT_CITY
+        cfg = NETWORKS[self.city]
+        self.inp_file = inp_file or cfg["inp"]
         self.current_scenario = "normal"
         self.simulation_time = 0.0
-        self.network_def = DoualaNeworkDefinition()
+        self.network_def = cfg["definition"]()
         self.wn = None            # Base WNTR WaterNetworkModel (never mutated directly)
         self.engine = "synthetic"
         self.baseline_pressures: Dict[str, float] = dict(self.network_def.FALLBACK_BASELINE_PRESSURES)
         self._tmp_dir = os.path.join("data", "tmp")
         self._lock = threading.Lock()
         self._run_counter = 0
+        self._inp_mtime: Optional[float] = None
         os.makedirs(self._tmp_dir, exist_ok=True)
         self._load_network()
+
+    def set_network(self, city: str) -> bool:
+        """
+        Switch the active EPANET city network at runtime (e.g. Douala <-> Bafoussam).
+        Takes effect immediately: reloads the .inp file, recomputes the live
+        baseline, and resets to the "normal" scenario.
+        """
+        if city not in NETWORKS:
+            return False
+        cfg = NETWORKS[city]
+        self.city = city
+        self.inp_file = cfg["inp"]
+        self.network_def = cfg["definition"]()
+        self.baseline_pressures = dict(self.network_def.FALLBACK_BASELINE_PRESSURES)
+        self.current_scenario = "normal"
+        self._inp_mtime = None
+        self._load_network()
+        logger.info(f"Switched active network to: {city} ({self.inp_file})")
+        return True
 
     def _load_network(self):
         """Load the real EPANET network file via WNTR and compute a live baseline."""
@@ -191,12 +320,32 @@ class EpanetSimulator:
         try:
             self.wn = wntr.network.WaterNetworkModel(self.inp_file)
             self.engine = "epanet"
+            self._inp_mtime = os.path.getmtime(self.inp_file)
             logger.info(f"Real EPANET network loaded via WNTR {wntr.__version__}: {self.inp_file}")
             self._compute_baseline()
         except Exception as e:
             logger.error(f"Failed to load EPANET network ({e}) — falling back to synthetic mode")
             self.wn = None
             self.engine = "synthetic"
+
+    def _check_hot_reload(self):
+        """
+        Detect if the active .inp file was edited and saved externally (e.g.
+        from EPANET Desktop) since it was last loaded, and if so, reload it
+        immediately. This is what makes edits made in the EPANET GUI —
+        elevations, pipe diameters/roughness, node positions, demands —
+        reflect on the live dashboard within one simulation tick, with no
+        backend restart required.
+        """
+        if not WNTR_AVAILABLE or not os.path.exists(self.inp_file):
+            return
+        try:
+            mtime = os.path.getmtime(self.inp_file)
+        except OSError:
+            return
+        if self._inp_mtime is not None and mtime != self._inp_mtime:
+            logger.info(f"Detected external edit to {self.inp_file} — hot-reloading network live")
+            self._load_network()
 
     def _compute_baseline(self):
         """Run one real EPANET solve under normal conditions to establish live baselines."""
@@ -221,6 +370,7 @@ class EpanetSimulator:
         """
         Execute one real hydraulic solve and return the full network state.
         """
+        self._check_hot_reload()
         self.simulation_time += 2.0  # internal tick clock (seconds)
 
         if self.wn is not None:
@@ -307,15 +457,30 @@ class EpanetSimulator:
             drop = max(0.0, baseline - pressure)
             status = self._classify_node_status(node_id, drop, scenario_cfg)
 
+            # Pull elevation/position live from the loaded WNTR model rather
+            # than the static display dict, so edits made in EPANET Desktop
+            # (dragging a node, changing its elevation) — saved to the .inp
+            # file and picked up by the hot-reload check — are genuinely
+            # reflected on the dashboard, not just stale display metadata.
+            live_elev, live_x, live_y = meta["elev"], meta["x"], meta["y"]
+            if self.wn is not None:
+                try:
+                    wn_node = self.wn.get_node(node_id)
+                    live_elev = wn_node.elevation
+                    if wn_node.coordinates:
+                        live_x, live_y = wn_node.coordinates
+                except Exception:
+                    pass
+
             nodes.append(NodeState(
                 id=node_id,
                 name=meta["name"],
                 pressure=round(pressure, 4),
                 head=round(solved["head_m"][node_id], 2),
                 demand=round(solved["demand_lps"][node_id], 3),
-                elevation=meta["elev"],
-                x=meta["x"],
-                y=meta["y"],
+                elevation=round(live_elev, 2),
+                x=live_x,
+                y=live_y,
                 status=status,
                 is_anomaly=drop > 0.02,
                 pressure_baseline=round(baseline, 4),
@@ -460,6 +625,10 @@ class EpanetSimulator:
             system_health=round(min(100, health), 1),
             simulation_time=self.simulation_time,
             engine=engine,
+            city=self.city,
+            city_label=NETWORKS[self.city]["label"],
+            title=self.network_def.TITLE,
+            infrastructure=list(self.network_def.INFRASTRUCTURE),
         )
 
     def get_node_info(self, node_id: str) -> Optional[Dict]:
@@ -481,6 +650,10 @@ class EpanetSimulator:
             "timestamp": float(snapshot.timestamp),
             "scenario": snapshot.scenario,
             "engine": snapshot.engine,
+            "city": snapshot.city,
+            "city_label": snapshot.city_label,
+            "title": snapshot.title,
+            "infrastructure": snapshot.infrastructure,
             "system_health": float(snapshot.system_health),
             "total_demand": float(snapshot.total_demand),
             "total_leakage": float(snapshot.total_leakage),

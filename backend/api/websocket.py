@@ -11,6 +11,8 @@ from typing import Set, Dict, Any
 from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
 
+from backend.iot.telemetry import registry as iot_registry
+
 
 def _safe(obj: Any) -> Any:
     """Recursively convert numpy types to plain Python for JSON serialization."""
@@ -92,9 +94,9 @@ async def simulation_broadcast_loop(simulator, detector, reporter, interval: flo
 
             # Run simulation tick
             snap = simulator.run_simulation()
-            snap_dict = simulator.to_json(snap)
+            snap_dict = iot_registry.apply_to_snapshot(simulator.to_json(snap))
 
-            # Run leak detection
+            # Run leak detection (uses IoT-overridden pressures when live)
             report = detector.analyze(snap_dict)
             report_dict = detector.to_dict(report)
 
@@ -105,6 +107,7 @@ async def simulation_broadcast_loop(simulator, detector, reporter, interval: flo
                 "timestamp": time.time(),
                 "network": snap_dict,
                 "leak_analysis": report_dict,
+                "iot": iot_registry.status(),
                 "system": {
                     "health": snap.system_health,
                     "scenario": snap.scenario,

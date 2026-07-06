@@ -6,12 +6,15 @@ All simulation, leak detection, and reporting endpoints.
 import time
 import json
 import math
+import os
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Header
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from loguru import logger
+
+from backend.iot.telemetry import registry as iot_registry
 
 
 def _safe_json(obj: Any) -> Any:
@@ -54,6 +57,9 @@ router = APIRouter(prefix="/api", tags=["maayan"])
 class ScenarioRequest(BaseModel):
     scenario: str  # normal | small | medium | burst
 
+class NetworkSelectRequest(BaseModel):
+    city: str  # douala | bafoussam
+
 class ReportRequest(BaseModel):
     language: str = "en"   # en | fr
     context: Optional[str] = None
@@ -62,6 +68,25 @@ class ScenarioResponse(BaseModel):
     success: bool
     scenario: str
     message: str
+
+class IoTTelemetryRequest(BaseModel):
+    """Payload from an ESP32/LoRa gateway or MQTT bridge."""
+    node_id: str
+    pressure: float = Field(..., description="Pressure reading in bar")
+    device_type: str = "esp32"
+    battery_level: Optional[float] = None
+    rssi: Optional[float] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    firmware_version: Optional[str] = None
+    status: str = "normal"
+
+
+def _verify_iot_ingest_key(x_maayan_key: Optional[str] = Header(None)):
+    """Optional API key guard for the telemetry ingest endpoint."""
+    expected = os.getenv("IOT_INGEST_API_KEY", "")
+    if expected and x_maayan_key != expected:
+        raise HTTPException(401, "Invalid or missing X-Maayan-Key header")
 
 
 # ── Network Endpoints ──────────────────────────────────────────────────────────
@@ -126,6 +151,40 @@ async def get_pressures():
     }))
 
 
+@router.get("/networks")
+async def list_networks():
+    """
+    List available simulated city networks (Douala, Bafoussam...) and which
+    one is currently active. Each maps to a real, independently-editable
+    EPANET .inp file under simulation/ that can be opened directly in
+    EPANET Desktop.
+    """
+    if _simulator is None:
+        raise HTTPException(503, "Simulator not ready")
+    from backend.epanet.simulator import NETWORKS
+    return {
+        "active": _simulator.city,
+        "networks": [
+            {"id": key, "label": cfg["label"], "inp_file": cfg["inp"]}
+            for key, cfg in NETWORKS.items()
+        ],
+    }
+
+
+@router.post("/networks/select")
+async def select_network(request: NetworkSelectRequest):
+    """
+    Switch the active EPANET city network live. Takes effect on the next
+    simulation tick — no restart required.
+    """
+    if _simulator is None:
+        raise HTTPException(503, "Simulator not ready")
+    ok = _simulator.set_network(request.city.lower())
+    if not ok:
+        raise HTTPException(400, f"Unknown network: {request.city}")
+    return {"success": True, "active": _simulator.city}
+
+
 # ── Leak Detection Endpoints ──────────────────────────────────────────────────
 
 @router.get("/leaks")
@@ -173,11 +232,15 @@ async def set_scenario(request: ScenarioRequest):
     if not success:
         raise HTTPException(500, "Failed to set scenario")
 
+    # Zone names come from the currently active network definition (Douala,
+    # Bafoussam, ...) so the description always matches the live dashboard.
+    leak_zone = _simulator.network_def.NODES.get("J7", {}).get("name", "J7")
+    upstream_zone = _simulator.network_def.NODES.get("J6", {}).get("name", "J6")
     scenario_descriptions = {
         "normal": "Normal network operation — all pressures baseline",
-        "small":  "Small leak at Makepe (J7) — 1.5 L/s loss",
-        "medium": "Medium leak at Makepe (J7) — 4.5 L/s loss",
-        "burst":  "Pipe burst between Ndokotti–Makepe — 12 L/s loss",
+        "small":  f"Small leak at {leak_zone} (J7) — 1.5 L/s loss",
+        "medium": f"Medium leak at {leak_zone} (J7) — 4.5 L/s loss",
+        "burst":  f"Pipe burst between {upstream_zone}–{leak_zone} — 12 L/s loss",
     }
 
     return ScenarioResponse(
@@ -290,6 +353,38 @@ async def get_status():
 
 # ── IoT Node Registry (Phase 2 ready) ────────────────────────────────────────
 
+@router.get("/iot/status")
+async def get_iot_status():
+    """Return IoT ingest connection status (MQTT + live node count)."""
+    return iot_registry.status()
+
+
+@router.post("/iot/telemetry")
+async def ingest_iot_telemetry(
+    payload: IoTTelemetryRequest,
+    _: None = Depends(_verify_iot_ingest_key),
+):
+    """
+    Accept a live pressure reading from a physical sensor node or LoRa gateway.
+
+  Phase 2 hardware posts here (or publishes to MQTT — see docs/hardware.md).
+  Fresh readings override that junction's pressure on the live dashboard
+  within the next WebSocket tick (~2s).
+    """
+    reading = iot_registry.ingest(
+        payload.node_id,
+        payload.pressure,
+        device_type=payload.device_type,
+        battery_level=payload.battery_level,
+        rssi=payload.rssi,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        firmware_version=payload.firmware_version,
+        status=payload.status,
+    )
+    return {"success": True, "reading": reading.to_dict()}
+
+
 @router.get("/iot/nodes")
 async def get_iot_nodes():
     """Return IoT sensor node registry (Phase 2 hardware integration)."""
@@ -299,23 +394,47 @@ async def get_iot_nodes():
     snap = _simulator.run_simulation()
     import random
 
+    live = {r.node_id: r for r in iot_registry.list_fresh()}
     iot_nodes = []
     for node in snap.nodes:
-        iot_nodes.append({
-            "node_id": node.id,
-            "name": node.name,
-            "device_type": "simulated",  # Will be 'esp32' or 'lora' in Phase 2
-            "battery_level": round(random.uniform(72, 98), 1),
-            "rssi": round(random.uniform(-85, -45), 0),
-            "pressure": node.pressure,
-            "status": node.status,
-            "last_seen": datetime.utcnow().isoformat(),
-            "firmware_version": "1.0.0-sim",
-            "latitude": None,   # Phase 2: real GPS coords
-            "longitude": None,
-        })
+        reading = live.get(node.id)
+        if reading:
+            iot_nodes.append({
+                "node_id": node.id,
+                "name": node.name,
+                "device_type": reading.device_type,
+                "battery_level": reading.battery_level,
+                "rssi": reading.rssi,
+                "pressure": reading.pressure,
+                "status": reading.status,
+                "last_seen": reading.to_dict()["last_seen"],
+                "firmware_version": reading.firmware_version or "unknown",
+                "latitude": reading.latitude,
+                "longitude": reading.longitude,
+                "is_live": True,
+            })
+        else:
+            iot_nodes.append({
+                "node_id": node.id,
+                "name": node.name,
+                "device_type": "simulated",
+                "battery_level": round(random.uniform(72, 98), 1),
+                "rssi": round(random.uniform(-85, -45), 0),
+                "pressure": node.pressure,
+                "status": node.status,
+                "last_seen": datetime.utcnow().isoformat(),
+                "firmware_version": "1.0.0-sim",
+                "latitude": None,
+                "longitude": None,
+                "is_live": False,
+            })
 
-    return {"nodes": iot_nodes, "total": len(iot_nodes)}
+    return {
+        "nodes": iot_nodes,
+        "total": len(iot_nodes),
+        "live_count": len(live),
+        "ingest": iot_registry.status(),
+    }
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

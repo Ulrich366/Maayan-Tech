@@ -28,6 +28,8 @@ from backend.ai.leak_detector import LeakDetectionEngine
 from backend.ai.llm_reporter import LLMReporter
 from backend.api.routes import router, set_services
 from backend.api.websocket import manager, simulation_broadcast_loop
+from backend.iot.mqtt_ingest import start_mqtt_ingest, stop_mqtt_ingest
+from backend.iot.telemetry import registry as iot_registry
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -37,7 +39,9 @@ APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("PORT", os.getenv("APP_PORT", "8000")))
 DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
-INP_FILE = os.getenv("EPANET_INP_FILE", "simulation/douala_network.inp")
+# Which simulated city network loads at startup — "douala" or "bafoussam".
+# Switchable live from the dashboard afterwards via POST /api/networks/select.
+DEFAULT_CITY = os.getenv("DEFAULT_CITY", "douala")
 SIM_INTERVAL = float(os.getenv("SIMULATION_INTERVAL_SECONDS", "2.0"))
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -48,7 +52,7 @@ logger.info("Starting Maayan Water Leak Detection System...")
 
 # ── Service Instances ─────────────────────────────────────────────────────────
 
-simulator = EpanetSimulator(inp_file=INP_FILE)
+simulator = EpanetSimulator(city=DEFAULT_CITY)
 detector = LeakDetectionEngine()
 reporter = LLMReporter()
 
@@ -68,6 +72,9 @@ async def lifespan(app: FastAPI):
         simulation_broadcast_loop(simulator, detector, reporter, interval=SIM_INTERVAL)
     )
 
+    # Phase 2: optional MQTT subscriber for live ESP32/LoRa sensor nodes
+    start_mqtt_ingest()
+
     logger.info(f"Server ready at http://{APP_HOST}:{APP_PORT}")
     logger.info(f"API docs: http://{APP_HOST}:{APP_PORT}/docs")
 
@@ -75,6 +82,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     broadcast_task.cancel()
+    stop_mqtt_ingest()
     try:
         await broadcast_task
     except asyncio.CancelledError:
@@ -88,7 +96,7 @@ app = FastAPI(
     title="Maayan - Water Leak Detection System",
     description=(
         "Intelligent water network monitoring and leak detection platform "
-        "for CAMWATER (Cameroon Water Utilities Corporation). "
+        "for municipal water utility operators. "
         "Powered by EPANET simulation, Machine Learning, and LLM analysis."
     ),
     version="1.0.0",
@@ -137,9 +145,14 @@ async def root():
             "GET  /api/leaks",
             "GET  /api/report",
             "POST /api/scenario",
+            "GET  /api/networks",
+            "POST /api/networks/select",
             "GET  /api/history",
             "GET  /api/nodes",
             "GET  /api/status",
+            "GET  /api/iot/nodes",
+            "GET  /api/iot/status",
+            "POST /api/iot/telemetry",
             "WS   /ws",
         ],
     }
@@ -157,7 +170,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         # Send initial state immediately on connect
         snap = simulator.run_simulation()
-        snap_dict = simulator.to_json(snap)
+        snap_dict = iot_registry.apply_to_snapshot(simulator.to_json(snap))
         report = detector.analyze(snap_dict)
 
         await manager.send_to(websocket, {
@@ -165,6 +178,7 @@ async def websocket_endpoint(websocket: WebSocket):
             "message": "Connected to Maayan real-time feed",
             "network": snap_dict,
             "leak_analysis": detector.to_dict(report),
+            "iot": iot_registry.status(),
         })
 
         # Keep connection alive, handle incoming messages
@@ -181,6 +195,14 @@ async def websocket_endpoint(websocket: WebSocket):
                         await manager.send_to(websocket, {
                             "type": "scenario_changed",
                             "scenario": scenario,
+                        })
+                    elif msg.get("type") == "set_network":
+                        city = msg.get("city", "douala")
+                        ok = simulator.set_network(city)
+                        await manager.send_to(websocket, {
+                            "type": "network_changed",
+                            "city": simulator.city,
+                            "success": ok,
                         })
                 except Exception:
                     pass

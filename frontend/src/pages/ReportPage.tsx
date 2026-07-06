@@ -41,7 +41,7 @@ export function ReportPage({ leakReport }: ReportPageProps) {
         </div>
         <div>
           <h1 className="text-lg font-semibold text-white">AI Hydraulic Report</h1>
-          <p className="text-xs text-white/40">AI-powered analysis for CAMWATER operators</p>
+          <p className="text-xs text-white/40">AI-powered analysis for water utility operators</p>
         </div>
       </div>
 
@@ -169,7 +169,7 @@ export function ReportPage({ leakReport }: ReportPageProps) {
               <div className="flex items-center gap-2">
                 <FileText size={14} className="text-cyan-400" />
                 <span className="text-sm font-medium text-white/80">
-                  CAMWATER Leak Analysis Report
+                  Maayan Leak Analysis Report
                 </span>
                 <span className="text-xs text-white/30 font-mono">
                   {new Date(report.generated_at).toLocaleString()}
@@ -232,7 +232,7 @@ export function ReportPage({ leakReport }: ReportPageProps) {
                 } · Language: {report.language.toUpperCase()}
               </span>
               <span className="text-xs text-white/20">
-                Powered by CAMWATER × Maayan
+                Powered by Maayan AI
               </span>
             </div>
           </motion.div>

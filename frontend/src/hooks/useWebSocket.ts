@@ -84,7 +84,8 @@ export function useWebSocket(): UseWebSocketReturn {
         // Keep-alive, no action needed
         break
       case 'scenario_changed':
-        // Handled via polling update
+      case 'network_changed':
+        // Reflected on the next network_update broadcast tick
         break
     }
   }, [])

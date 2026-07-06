@@ -31,7 +31,7 @@ OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 
 
 SYSTEM_PROMPT_EN = """You are a senior hydraulic engineer and water network specialist
-working for CAMWATER (Cameroon Water Utilities Corporation).
+supporting municipal water utility operations in Cameroon.
 
 Your role is to analyze water pressure anomaly data detected by the Maayan intelligent
 leak detection system and produce a clear, professional technical report for field operators.
@@ -45,7 +45,7 @@ Keep the report:
 """
 
 SYSTEM_PROMPT_FR = """Vous êtes un ingénieur hydraulique senior et spécialiste des réseaux d'eau
-travaillant pour la CAMWATER (Cameroun Water Utilities Corporation).
+appuyant l'exploitation d'un service municipal de l'eau au Cameroun.
 
 Votre rôle est d'analyser les données d'anomalie de pression d'eau détectées par le système
 intelligent de détection de fuites Maayan et de produire un rapport technique clair et
@@ -72,7 +72,7 @@ def generate_fallback_report(data: Dict, language: str = "en") -> str:
 
     if language == "fr":
         if not data.get("detected", False):
-            return """## Rapport de Système - Maayan CAMWATER
+            return """## Rapport de Système - Maayan
 
 **Statut:** ✅ Réseau Normal
 
@@ -90,7 +90,7 @@ Aucune déviation statistiquement significative n'a été identifiée.
 - Maintenir les cycles d'inspection préventive
 - Vérifier les lectures des capteurs selon le calendrier de maintenance"""
 
-        return f"""## Rapport de Fuite - Maayan CAMWATER
+        return f"""## Rapport de Fuite - Maayan
 **Horodatage:** {timestamp}
 
 **⚠️ ALERTE DE FUITE DÉTECTÉE**
@@ -115,11 +115,11 @@ Un débit non comptabilisé de {flow_loss:.1f} L/s représente une perte hydraul
 2. Fermer les vannes d'isolement de ce secteur si nécessaire
 3. Inspecter visuellement les regards et surfaces pour signes d'infiltration
 4. Documenter les relevés de pression sur site
-5. Notifier le superviseur de réseau et mettre à jour le journal CAMWATER"""
+5. Notifier le superviseur de réseau et mettre à jour le journal d'exploitation"""
 
     else:
         if not data.get("detected", False):
-            return """## System Report - Maayan CAMWATER
+            return """## System Report - Maayan
 
 **Status:** ✅ Network Normal
 
@@ -138,7 +138,7 @@ or machine learning detection engines.
 - Maintain scheduled preventive inspection cycles
 - Verify sensor readings per maintenance calendar"""
 
-        return f"""## Leak Detection Report - Maayan CAMWATER
+        return f"""## Leak Detection Report - Maayan
 **Timestamp:** {timestamp}
 
 **⚠️ LEAK ALERT DETECTED**
@@ -164,7 +164,7 @@ and potential service disruption risk for downstream consumers.
 2. Close isolation valves for this sector if necessary
 3. Visually inspect manholes and surfaces for signs of water ingress
 4. Document on-site pressure readings
-5. Notify network supervisor and update CAMWATER operations log"""
+5. Notify network supervisor and update the operations log"""
 
 
 class LLMReporter:
@@ -246,7 +246,7 @@ class LLMReporter:
         timestamp = data.get("timestamp", "N/A")
 
         if language == "fr":
-            user_prompt = f"""Générez un rapport de fuite d'eau professionnel pour CAMWATER basé sur les données suivantes du système Maayan:
+            user_prompt = f"""Générez un rapport de fuite d'eau professionnel pour l'opérateur du service de l'eau basé sur les données suivantes du système Maayan:
 
 **Données du Système:**
 - Horodatage: {timestamp}
@@ -262,7 +262,7 @@ class LLMReporter:
 
 Rédigez le rapport en français avec les sections: Résumé, Analyse Technique, Évaluation des Risques, Actions Recommandées."""
         else:
-            user_prompt = f"""Generate a professional water leak report for CAMWATER based on the following Maayan system data:
+            user_prompt = f"""Generate a professional water leak report for the water utility operator based on the following Maayan system data:
 
 **System Data:**
 - Timestamp: {timestamp}

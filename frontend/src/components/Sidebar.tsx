@@ -71,7 +71,7 @@ export function Sidebar({ collapsed = false }: SidebarProps) {
       {!collapsed && (
         <div className="px-5 py-4 border-t border-white/[0.06]">
           <div className="text-[10px] text-white/25 text-center">
-            CAMWATER © 2024 · Maayan v1.0
+            Maayan © 2026
           </div>
         </div>
       )}

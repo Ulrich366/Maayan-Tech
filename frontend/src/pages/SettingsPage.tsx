@@ -3,9 +3,9 @@
  */
 
 import { useState } from 'react'
-import { Settings, Zap, Globe, Moon, Info } from 'lucide-react'
-import { Scenario, Language } from '../types'
-import { useScenario } from '../hooks/useApi'
+import { Settings, Zap, Globe, Moon, Info, MapPin } from 'lucide-react'
+import { Scenario, Language, NetworkSnapshot } from '../types'
+import { useScenario, useNetworks } from '../hooks/useApi'
 import { getScenarioLabel, cn } from '../utils'
 
 interface SettingsPageProps {
@@ -13,14 +13,25 @@ interface SettingsPageProps {
   onScenarioChange: (s: Scenario) => void
   language: Language
   onLanguageChange: (l: Language) => void
+  network?: NetworkSnapshot | null
 }
 
-const SCENARIOS: { id: Scenario; description: string; risk: string }[] = [
-  { id: 'normal', description: 'All nodes operating at baseline pressure. No anomalies.', risk: 'None' },
-  { id: 'small',  description: 'Minor leak at Makepe (J7). 1.5 L/s unaccounted flow.', risk: 'Low' },
-  { id: 'medium', description: 'Significant leak at Makepe (J7). 4.5 L/s loss. Pressure drop visible.', risk: 'Medium' },
-  { id: 'burst',  description: 'Full pipe burst between Ndokotti–Makepe (P7). Emergency situation.', risk: 'Critical' },
+// Kept in sync with backend.epanet.simulator.NETWORKS
+const CITIES: { id: string; label: string; description: string }[] = [
+  { id: 'douala',    label: 'Douala, Littoral Region',  description: '12 junctions · Coastal network fed by the Bassa & Japoma reservoirs.' },
+  { id: 'bafoussam', label: 'Bafoussam, West Region',    description: '12 junctions · Highland-plateau network (~1500m) fed by the Mifi reservoir.' },
 ]
+
+function buildScenarios(network?: NetworkSnapshot | null): { id: Scenario; description: string; risk: string }[] {
+  const leakZone = network?.nodes.find(n => n.id === 'J7')?.name || 'J7'
+  const upstreamZone = network?.nodes.find(n => n.id === 'J6')?.name || 'J6'
+  return [
+    { id: 'normal', description: 'All nodes operating at baseline pressure. No anomalies.', risk: 'None' },
+    { id: 'small',  description: `Minor leak at ${leakZone} (J7). 1.5 L/s unaccounted flow.`, risk: 'Low' },
+    { id: 'medium', description: `Significant leak at ${leakZone} (J7). 4.5 L/s loss. Pressure drop visible.`, risk: 'Medium' },
+    { id: 'burst',  description: `Full pipe burst between ${upstreamZone}–${leakZone} (P7). Emergency situation.`, risk: 'Critical' },
+  ]
+}
 
 const RISK_COLORS: Record<string, string> = {
   'None': 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
@@ -29,14 +40,22 @@ const RISK_COLORS: Record<string, string> = {
   'Critical': 'text-red-400 border-red-500/30 bg-red-500/10',
 }
 
-export function SettingsPage({ currentScenario, onScenarioChange, language, onLanguageChange }: SettingsPageProps) {
+export function SettingsPage({ currentScenario, onScenarioChange, language, onLanguageChange, network }: SettingsPageProps) {
   const { setScenario, loading } = useScenario()
+  const { selectNetwork, loading: networkLoading } = useNetworks()
   const [simSpeed, setSimSpeed] = useState(2)
 
   const handleScenario = async (s: Scenario) => {
     await setScenario(s)
     onScenarioChange(s)
   }
+
+  const activeCity = network?.city || 'douala'
+  const handleCity = async (id: string) => {
+    if (id === activeCity) return
+    await selectNetwork(id)
+  }
+  const SCENARIOS = buildScenarios(network)
 
   return (
     <div className="p-6 space-y-6 overflow-y-auto h-full max-w-3xl">
@@ -49,6 +68,45 @@ export function SettingsPage({ currentScenario, onScenarioChange, language, onLa
         <div>
           <h1 className="text-lg font-semibold text-white">Settings</h1>
           <p className="text-xs text-white/40">Simulation control and display preferences</p>
+        </div>
+      </div>
+
+      {/* Network / City Selection */}
+      <div className="glass-card p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <MapPin size={16} className="text-cyan-400" />
+          <h2 className="text-sm font-semibold text-white">Simulated Network</h2>
+        </div>
+        <p className="text-xs text-white/30 mb-3">
+          Each municipality maps to a real, independently-editable EPANET .inp file under
+          simulation/. Open it in EPANET Desktop and save — your edits reflect on this
+          dashboard live, within one simulation tick.
+        </p>
+        <div className="space-y-3">
+          {CITIES.map(({ id, label, description }) => (
+            <button
+              key={id}
+              onClick={() => handleCity(id)}
+              disabled={networkLoading}
+              className={cn(
+                'w-full text-left p-4 rounded-xl border transition-all duration-200',
+                activeCity === id
+                  ? 'border-cyan-500/40 bg-cyan-500/[0.08]'
+                  : 'border-white/[0.08] hover:border-white/[0.15] hover:bg-white/[0.02]'
+              )}
+            >
+              <div className="flex items-center gap-2 mb-1.5">
+                {activeCity === id && <div className="w-2 h-2 rounded-full bg-cyan-400" />}
+                <span className={cn(
+                  'text-sm font-semibold',
+                  activeCity === id ? 'text-cyan-400' : 'text-white/70'
+                )}>
+                  {label}
+                </span>
+              </div>
+              <p className="text-xs text-white/40 ml-4">{description}</p>
+            </button>
+          ))}
         </div>
       </div>
 
@@ -164,13 +222,12 @@ export function SettingsPage({ currentScenario, onScenarioChange, language, onLa
         <div className="grid grid-cols-2 gap-y-2 text-xs">
           {[
             { label: 'System', value: 'Maayan v1.0.0' },
-            { label: 'Network', value: 'Douala, Cameroon' },
-            { label: 'Nodes', value: '12 junctions' },
-            { label: 'Pipes', value: '18 segments' },
+            { label: 'Network', value: network?.city_label || 'Douala, Littoral Region' },
+            { label: 'Nodes', value: `${network?.nodes.length ?? 12} junctions` },
+            { label: 'Pipes', value: `${network?.pipes.length ?? 18} segments` },
             { label: 'Simulation', value: 'EPANET 2.2 / WNTR' },
             { label: 'ML Models', value: 'Isolation Forest + RF' },
             { label: 'LLM', value: 'Groq (Llama 3.3 70B)' },
-            { label: 'Client', value: 'CAMWATER' },
           ].map(({ label, value }) => (
             <div key={label} className="flex justify-between pr-6">
               <span className="text-white/30">{label}:</span>

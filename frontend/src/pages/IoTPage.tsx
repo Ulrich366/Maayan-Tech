@@ -11,7 +11,7 @@ import { NodeStatus } from '../types'
 import { cn } from '../utils'
 
 export function IoTPage() {
-  const { fetchNodes, nodes, loading } = useIoTNodes()
+  const { fetchNodes, nodes, liveCount, loading } = useIoTNodes()
 
   useEffect(() => {
     fetchNodes()
@@ -36,7 +36,11 @@ export function IoTPage() {
 
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/20">
           <Radio size={12} className="text-amber-400" />
-          <span className="text-xs text-amber-400 font-medium">Simulation Mode</span>
+          <span className="text-xs text-amber-400 font-medium">
+            {liveCount > 0
+              ? `${liveCount} Live IoT Node(s)`
+              : 'Simulation Mode — HTTP/MQTT ingest ready'}
+          </span>
         </div>
       </div>
 
@@ -47,9 +51,9 @@ export function IoTPage() {
           <div>
             <p className="text-sm font-medium text-violet-400">Phase 2 Hardware Integration Ready</p>
             <p className="text-xs text-white/40 mt-1">
-              This interface is designed to seamlessly support real ESP32 + LoRa sensor nodes.
-              Each simulated node below represents a future physical sensor at that network junction.
-              In Phase 2, MQTT messages replace these simulated values without any frontend changes.
+              Live hardware connects via <span className="font-mono text-white/50">POST /api/iot/telemetry</span> (HTTP)
+              or MQTT topic <span className="font-mono text-white/50">maayan/sensors/&#123;node_id&#125;/pressure</span>.
+              Fresh readings override simulation pressures on the dashboard within ~2s.
             </p>
             <div className="flex gap-3 mt-2">
               {['ESP32 Microcontroller', 'LoRa 915MHz', 'MQTT Protocol', 'Battery Powered'].map(tech => (

@@ -355,18 +355,16 @@ class LeakDetectionEngine:
         "burst":  "red",
     }
 
-    # Pipe lookup from node anomaly to likely affected pipe
+    # Pipe lookup from node anomaly to likely affected pipe. Node/pipe IDs
+    # (J1-J12 / P1-P18) are shared across every simulated city network, so
+    # this mapping is topology-based and works unchanged for all of them.
+    # Human-readable zone *names* are NOT hardcoded here — they're read
+    # live from each node's "name" field in the snapshot, which already
+    # reflects whichever city network (Douala, Bafoussam, ...) is active.
     NODE_TO_PIPE = {
         "J7": "P7", "J6": "P6", "J8": "P8",
         "J5": "P5", "J4": "P4", "J3": "P3",
         "J2": "P2", "J1": "P1",
-    }
-
-    ZONE_NAMES = {
-        "J1": "Akwa", "J2": "Bali", "J3": "Deido", "J4": "Bonaberi",
-        "J5": "New Bell", "J6": "Ndokotti", "J7": "Makepe", "J8": "Logbessou",
-        "J9": "Bonamoussadi", "J10": "Cité des Palmiers",
-        "J11": "Village", "J12": "PK14",
     }
 
     def __init__(self):
@@ -389,7 +387,8 @@ class LeakDetectionEngine:
         ml_result = self.ml.predict(pressures)
 
         # --- Combine Results ---
-        report = self._combine(stat_result, ml_result, nodes, scenario)
+        zone_names = {n["id"]: n.get("name", n["id"]) for n in nodes}
+        report = self._combine(stat_result, ml_result, nodes, scenario, zone_names)
         self.last_report = report
         return report
 
@@ -399,6 +398,7 @@ class LeakDetectionEngine:
         ml: Dict,
         nodes: List[Dict],
         scenario: str,
+        zone_names: Optional[Dict[str, str]] = None,
     ) -> LeakReport:
         """Combine statistical and ML results into a final LeakReport."""
         detected = stat.get("detected", False) or ml.get("anomaly", False)
@@ -428,17 +428,18 @@ class LeakDetectionEngine:
         probability = round((stat_prob * 0.6 + ml_conf * 0.4), 1) if detected else 0
 
         # Location from worst node
+        zone_names = zone_names or {}
         location = "No anomaly detected"
         pipe_id = None
         if worst_node:
-            zone = self.ZONE_NAMES.get(worst_node, worst_node)
+            zone = zone_names.get(worst_node, worst_node)
             # Get pipe segment
             pipe_id = self.NODE_TO_PIPE.get(worst_node)
             if pipe_id:
                 # Find adjacent node with a real, non-trivial pressure drop
                 for n in nodes:
                     if n["id"] != worst_node and n.get("pressure_drop", 0) > self.statistical.THRESHOLDS["low"]:
-                        adj_zone = self.ZONE_NAMES.get(n["id"], n["id"])
+                        adj_zone = zone_names.get(n["id"], n["id"])
                         location = f"Between {zone} and {adj_zone} ({pipe_id})"
                         break
                 else:

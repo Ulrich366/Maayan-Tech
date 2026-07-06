@@ -58,6 +58,7 @@ function AppContent() {
           lastUpdate={network ? new Date() : null}
           leakCount={leakCount}
           engine={network?.engine}
+          city={network?.city}
         />
 
         <main className="flex-1 overflow-hidden">
@@ -95,6 +96,7 @@ function AppContent() {
                     onScenarioChange={handleScenarioChange}
                     language={language}
                     onLanguageChange={setLanguage}
+                    network={network}
                   />
                 } />
               </Routes>

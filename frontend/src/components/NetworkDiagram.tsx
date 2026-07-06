@@ -1,6 +1,8 @@
 /**
- * NetworkDiagram — SVG-based digital twin of the Douala water network.
- * Renders nodes, pipes, animated flow, leak indicators.
+ * NetworkDiagram — SVG-based digital twin of the active simulated water
+ * network (Douala, Bafoussam, ...). Renders nodes, pipes, animated flow,
+ * leak indicators. Reservoir/tank labels and the title are driven by the
+ * live network snapshot, so this component works unchanged for any city.
  */
 
 import { useState, useCallback } from 'react'
@@ -121,11 +123,12 @@ export function NetworkDiagram({ network, width, height, onNodeClick }: NetworkD
 
   const nodeMap = Object.fromEntries(network.nodes.map(n => [n.id, n]))
 
-  // Reservoir/Tank pseudo-nodes (fixed positions)
-  const specialNodes = [
-    { id: 'R1', label: 'Reservoir\nBassa', x: 200, y: 500, type: 'reservoir' },
-    { id: 'R2', label: 'Reservoir\nJapoma', x: 200, y: 650, type: 'reservoir' },
-    { id: 'T1', label: 'Tank\nAkwa', x: 300, y: 350, type: 'tank' },
+  // Reservoir/Tank pseudo-nodes — positions/labels come from the active
+  // network's live snapshot, so they're correct for whichever city
+  // (Douala, Bafoussam, ...) is currently selected.
+  const specialNodes = network.infrastructure?.length ? network.infrastructure : [
+    { id: 'R1', label: 'Reservoir\nSource', x: 200, y: 500, type: 'reservoir' as const },
+    { id: 'T1', label: 'Tank', x: 300, y: 350, type: 'tank' as const },
   ]
 
   const getCoord = (id: string) => {
@@ -177,7 +180,7 @@ export function NetworkDiagram({ network, width, height, onNodeClick }: NetworkD
 
         {/* Title */}
         <text x="20" y="30" fill="rgba(255,255,255,0.3)" fontSize="11" fontFamily="Inter, sans-serif" fontWeight="500">
-          DOUALA WATER DISTRIBUTION NETWORK — CAMWATER
+          {network.title || 'WATER DISTRIBUTION NETWORK'}
         </text>
 
         {/* Pipes */}

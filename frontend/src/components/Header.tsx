@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion'
-import { Bell, RefreshCw, Cpu, FlaskConical } from 'lucide-react'
+import { Bell, RefreshCw, Cpu, FlaskConical, MapPin } from 'lucide-react'
 import { ConnectionBadge } from './ui/ConnectionBadge'
-import { useScenario } from '../hooks/useApi'
+import { useScenario, useNetworks } from '../hooks/useApi'
 import { Scenario } from '../types'
 import { getScenarioLabel, cn } from '../utils'
 import { formatTime } from '../utils'
@@ -15,9 +15,17 @@ interface HeaderProps {
   lastUpdate: Date | null
   leakCount?: number
   engine?: 'epanet' | 'synthetic'
+  city?: string
+  onCityChange?: (city: string) => void
 }
 
 const SCENARIOS: Scenario[] = ['normal', 'small', 'medium', 'burst']
+
+// Kept in sync with backend.epanet.simulator.NETWORKS
+const CITIES: { id: string; label: string }[] = [
+  { id: 'douala', label: 'Douala' },
+  { id: 'bafoussam', label: 'Bafoussam' },
+]
 
 const SCENARIO_COLORS: Record<Scenario, string> = {
   normal: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
@@ -28,13 +36,20 @@ const SCENARIO_COLORS: Record<Scenario, string> = {
 
 export function Header({
   title, isConnected, connectionAttempt, scenario,
-  onScenarioChange, lastUpdate, leakCount = 0, engine
+  onScenarioChange, lastUpdate, leakCount = 0, engine, city, onCityChange
 }: HeaderProps) {
   const { setScenario, loading } = useScenario()
+  const { selectNetwork, loading: networkLoading } = useNetworks()
 
   const handleScenarioChange = async (s: Scenario) => {
     await setScenario(s)
     onScenarioChange?.(s)
+  }
+
+  const handleCityChange = async (id: string) => {
+    if (id === city) return
+    await selectNetwork(id)
+    onCityChange?.(id)
   }
 
   return (
@@ -59,6 +74,28 @@ export function Header({
           )}>
             {engine === 'epanet' ? <Cpu size={12} /> : <FlaskConical size={12} />}
             {engine === 'epanet' ? 'Real EPANET 2.2' : 'Synthetic Fallback'}
+          </div>
+        )}
+
+        {/* City / network selector — switch which simulated EPANET network drives the dashboard */}
+        {city && (
+          <div className="flex items-center gap-1 bg-white/[0.04] rounded-lg p-1 border border-white/[0.08]">
+            <MapPin size={12} className="text-white/30 ml-1.5" />
+            {CITIES.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => handleCityChange(c.id)}
+                disabled={networkLoading}
+                className={cn(
+                  'px-2.5 py-1.5 rounded-md text-xs font-medium transition-all duration-200 border',
+                  city === c.id
+                    ? 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10'
+                    : 'text-white/40 border-transparent hover:text-white/70 hover:bg-white/[0.05]'
+                )}
+              >
+                {c.label}
+              </button>
+            ))}
           </div>
         )}
 
