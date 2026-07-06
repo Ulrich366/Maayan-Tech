@@ -162,3 +162,49 @@ export function useIoTNodes() {
 
   return { fetchNodes, nodes, liveCount, loading }
 }
+
+export interface MlLearningStatus {
+  enabled: boolean
+  retraining: boolean
+  total_recorded: number
+  samples_since_retrain: number
+  retrain_threshold: number
+  last_retrain_at: string | null
+  last_retrain_metrics?: {
+    samples?: number
+    severity_accuracy?: number
+    localization_mae?: number | null
+  }
+  sample_counts?: {
+    baseline: number
+    continuous: number
+    feedback: number
+    combined: number
+  }
+}
+
+export function useMlStatus() {
+  const [status, setStatus] = useState<MlLearningStatus | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const fetchStatus = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await apiFetch<MlLearningStatus>('/ml/status')
+      setStatus(data)
+      return data
+    } catch (e) {
+      console.error('ML status error:', e)
+      return null
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const triggerRetrain = useCallback(async () => {
+    await apiFetch('/ml/retrain', { method: 'POST' })
+    return fetchStatus()
+  }, [fetchStatus])
+
+  return { status, fetchStatus, triggerRetrain, loading }
+}

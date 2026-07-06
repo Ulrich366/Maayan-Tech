@@ -23,7 +23,7 @@ from loguru import logger
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-NODE_IDS = ["J1", "J2", "J3", "J4", "J5", "J6", "J7", "J8", "J9", "J10", "J11", "J12"]
+from backend.ai.model_trainer import NODE_FEATURES as NODE_IDS, SCENARIO_TO_CLASS
 
 # Candidate leak locations. Only used with the real EPANET solver, which
 # correctly propagates the hydraulic effect of a leak at any junction
@@ -77,6 +77,7 @@ def generate_dataset(n_samples: int = 600) -> pd.DataFrame:
 
         row = {nid: round(solved["pressure_bar"][nid], 4) for nid in NODE_IDS}
         row["leak_node"] = leak_node
+        row["leak_node_idx"] = NODE_IDS.index(leak_node) if leak_node in NODE_IDS else -1
         row["leak_severity_lps"] = leak_demand
         row["scenario"] = label
         row["label"] = class_id

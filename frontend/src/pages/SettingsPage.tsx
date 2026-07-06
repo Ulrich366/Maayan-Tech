@@ -2,10 +2,10 @@
  * Settings Page — Simulation controls, language, display preferences.
  */
 
-import { useState } from 'react'
-import { Settings, Zap, Globe, Moon, Info, MapPin } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Settings, Zap, Globe, Moon, Info, MapPin, Brain, RefreshCw } from 'lucide-react'
 import { Scenario, Language, NetworkSnapshot } from '../types'
-import { useScenario, useNetworks } from '../hooks/useApi'
+import { useScenario, useNetworks, useMlStatus } from '../hooks/useApi'
 import { getScenarioLabel, cn } from '../utils'
 
 interface SettingsPageProps {
@@ -43,7 +43,14 @@ const RISK_COLORS: Record<string, string> = {
 export function SettingsPage({ currentScenario, onScenarioChange, language, onLanguageChange, network }: SettingsPageProps) {
   const { setScenario, loading } = useScenario()
   const { selectNetwork, loading: networkLoading } = useNetworks()
+  const { status: mlStatus, fetchStatus, triggerRetrain, loading: mlLoading } = useMlStatus()
   const [simSpeed, setSimSpeed] = useState(2)
+
+  useEffect(() => {
+    fetchStatus()
+    const interval = setInterval(fetchStatus, 15000)
+    return () => clearInterval(interval)
+  }, [fetchStatus])
 
   const handleScenario = async (s: Scenario) => {
     await setScenario(s)
@@ -213,6 +220,42 @@ export function SettingsPage({ currentScenario, onScenarioChange, language, onLa
         </div>
       </div>
 
+      {/* ML Continuous Learning */}
+      <div className="glass-card p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Brain size={16} className="text-violet-400" />
+            <h2 className="text-sm font-semibold text-white">ML Continuous Learning</h2>
+          </div>
+          <button
+            onClick={() => triggerRetrain()}
+            disabled={mlLoading || mlStatus?.retraining}
+            className="flex items-center gap-1.5 text-[11px] text-white/50 hover:text-violet-400 transition-colors disabled:opacity-40"
+          >
+            <RefreshCw size={12} className={mlStatus?.retraining ? 'animate-spin' : ''} />
+            Retrain now
+          </button>
+        </div>
+        <p className="text-xs text-white/30 mb-4">
+          Models automatically learn from live simulation data and improve as more scenarios are observed.
+        </p>
+        <div className="grid grid-cols-2 gap-y-2 text-xs">
+          {[
+            { label: 'Status', value: mlStatus?.enabled ? (mlStatus.retraining ? 'Retraining…' : 'Active') : 'Disabled' },
+            { label: 'Samples recorded', value: String(mlStatus?.total_recorded ?? '—') },
+            { label: 'Training pool', value: String(mlStatus?.sample_counts?.combined ?? '—') },
+            { label: 'Until next retrain', value: mlStatus ? `${mlStatus.samples_since_retrain}/${mlStatus.retrain_threshold}` : '—' },
+            { label: 'Severity accuracy', value: mlStatus?.last_retrain_metrics?.severity_accuracy != null ? `${(mlStatus.last_retrain_metrics.severity_accuracy * 100).toFixed(1)}%` : '—' },
+            { label: 'Last retrain', value: mlStatus?.last_retrain_at ? new Date(mlStatus.last_retrain_at).toLocaleString() : 'Pending' },
+          ].map(({ label, value }) => (
+            <div key={label} className="flex justify-between pr-4">
+              <span className="text-white/30">{label}:</span>
+              <span className="text-white/60 font-mono">{value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* System Info */}
       <div className="glass-card p-5">
         <div className="flex items-center gap-2 mb-4">
@@ -226,7 +269,7 @@ export function SettingsPage({ currentScenario, onScenarioChange, language, onLa
             { label: 'Nodes', value: `${network?.nodes.length ?? 12} junctions` },
             { label: 'Pipes', value: `${network?.pipes.length ?? 18} segments` },
             { label: 'Simulation', value: 'EPANET 2.2 / WNTR' },
-            { label: 'ML Models', value: 'Isolation Forest + RF' },
+            { label: 'ML Models', value: 'Continuous (IF + RF + GB)' },
             { label: 'LLM', value: 'Groq (Llama 3.3 70B)' },
           ].map(({ label, value }) => (
             <div key={label} className="flex justify-between pr-6">

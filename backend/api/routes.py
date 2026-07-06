@@ -356,6 +356,58 @@ async def get_status():
     }))
 
 
+# ── Machine Learning / Continuous Learning ────────────────────────────────────
+
+class MLFeedbackRequest(BaseModel):
+    """Operator-verified label for continuous learning (Phase 2 field use)."""
+    node_id: Optional[str] = None
+    severity_class: int = Field(..., ge=0, le=3, description="0=normal, 1=small, 2=medium, 3=burst")
+    pressures: Optional[Dict[str, float]] = None
+
+
+@router.get("/ml/status")
+async def get_ml_status():
+    """Return continuous learning stats and latest model metrics."""
+    if _detector is None:
+        raise HTTPException(503, "Detector not ready")
+    return _detector.learning_status()
+
+
+@router.post("/ml/retrain")
+async def trigger_ml_retrain():
+    """Manually schedule a background model retrain on all accumulated data."""
+    if _detector is None:
+        raise HTTPException(503, "Detector not ready")
+    return _detector.learner.force_retrain()
+
+
+@router.post("/ml/feedback")
+async def submit_ml_feedback(request: MLFeedbackRequest):
+    """
+    Submit operator-verified ground truth to improve models.
+    If pressures are omitted, uses the current live network snapshot.
+    """
+    if _detector is None or _simulator is None:
+        raise HTTPException(503, "Services not ready")
+
+    if request.pressures:
+        pressures = request.pressures
+        city = _simulator.city
+    else:
+        snap = _simulator.run_simulation()
+        snap_dict = _simulator.to_json(snap)
+        pressures = {n["id"]: n["pressure"] for n in snap_dict.get("nodes", [])}
+        city = snap_dict.get("city", "douala")
+
+    _detector.learner.record_feedback(
+        pressures,
+        request.node_id,
+        request.severity_class,
+        city=city,
+    )
+    return {"success": True, "message": "Feedback recorded — retrain scheduled"}
+
+
 # ── IoT Node Registry (Phase 2 ready) ────────────────────────────────────────
 
 @router.get("/iot/status")

@@ -23,6 +23,7 @@ logs/
 data/tmp/
 data/models/*.joblib
 data/training/*.csv
+data/models/training_metrics.json
 
 # Stray EPANET solver temp files (should live under data/tmp/, but guard against
 # accidental root-level leftovers from interrupted solves)

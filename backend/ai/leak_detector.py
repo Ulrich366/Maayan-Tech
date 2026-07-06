@@ -4,21 +4,36 @@ Leak Detection Engine for Maayan.
 Combines statistical pressure analysis with machine learning models
 (Isolation Forest + Random Forest) to detect, locate, and quantify
 water network leaks in real time.
+
+ML models continuously improve via backend.ai.continuous_learner as new
+labeled simulation observations are collected.
 """
 
 import os
-import json
-import math
-import numpy as np
-import pandas as pd
-import joblib
-from typing import List, Dict, Optional, Tuple, Any
+import threading
+from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
+
+import joblib
+import numpy as np
 from loguru import logger
 from sklearn.ensemble import IsolationForest, RandomForestRegressor, GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
+
+from backend.ai.model_trainer import (
+    NODE_FEATURES,
+    MODEL_DIR,
+    ISO_MODEL_FILE,
+    RF_LOCATION_FILE,
+    GB_SEVERITY_FILE,
+    SCALER_FILE,
+    train_models,
+    save_models,
+    load_metrics,
+)
+from backend.ai.learning_store import LearningStore
+from backend.ai.continuous_learner import ContinuousLearner
 
 
 @dataclass
@@ -28,30 +43,20 @@ class LeakReport:
     location: str
     node_id: Optional[str]
     pipe_id: Optional[str]
-    probability: float          # 0–100
-    severity: str               # none, low, medium, high, burst
-    pressure_drop: float        # bar
-    estimated_flow_loss: float  # L/s
+    probability: float
+    severity: str
+    pressure_drop: float
+    estimated_flow_loss: float
     affected_nodes: List[str]
-    confidence: float           # 0–100
-    detection_method: str       # statistical, ml, combined
+    confidence: float
+    detection_method: str
     timestamp: str
-    alert_level: str            # green, yellow, orange, red
+    alert_level: str
 
 
 class StatisticalDetector:
-    """
-    Fast statistical leak detector using z-score and threshold comparison.
-    Runs every cycle as the first-line detector.
-    """
+    """Fast statistical leak detector using z-score and threshold comparison."""
 
-    # Severity thresholds (pressure drop in bar).
-    # Calibrated against REAL EPANET solves on the Douala network (a looped,
-    # tank-backed network is naturally resilient, so real drops are modest
-    # compared to a naive single-pipe assumption):
-    #   small leak  (1.5 L/s @ J7)  -> ~0.026 bar drop at J7
-    #   medium leak (4.5 L/s @ J7)  -> ~0.085 bar drop at J7
-    #   burst       (12.0 L/s @ J7) -> ~0.322 bar drop at J7
     THRESHOLDS = {
         "none":   0.015,
         "low":    0.020,
@@ -62,10 +67,9 @@ class StatisticalDetector:
 
     def __init__(self):
         self.pressure_history: Dict[str, List[float]] = {}
-        self.window_size = 30  # Number of readings for baseline
+        self.window_size = 30
 
     def update(self, node_id: str, pressure: float):
-        """Add a new pressure reading to the history."""
         if node_id not in self.pressure_history:
             self.pressure_history[node_id] = []
         hist = self.pressure_history[node_id]
@@ -74,10 +78,6 @@ class StatisticalDetector:
             self.pressure_history[node_id] = hist[-self.window_size * 3:]
 
     def detect(self, nodes: List[Dict]) -> Dict[str, Any]:
-        """
-        Run statistical anomaly detection on current node pressures.
-        Returns anomaly information for any detected issues.
-        """
         anomalies = []
         max_drop = 0.0
         worst_node = None
@@ -104,7 +104,6 @@ class StatisticalDetector:
         if not anomalies:
             return {"detected": False, "drop": 0.0, "node": None, "anomalies": []}
 
-        # Z-score check against history if we have enough data
         if worst_node and worst_node in self.pressure_history:
             hist = self.pressure_history[worst_node]
             if len(hist) >= 10:
@@ -112,7 +111,6 @@ class StatisticalDetector:
                 std = max(np.std(hist[:-1]), 0.001)
                 z = abs(hist[-1] - mean) / std
                 if z < 2.0:
-                    # Not statistically significant yet
                     return {"detected": False, "drop": max_drop, "node": worst_node, "anomalies": anomalies}
 
         return {
@@ -123,7 +121,6 @@ class StatisticalDetector:
         }
 
     def classify_severity(self, pressure_drop: float) -> str:
-        """Classify severity from pressure drop value."""
         if pressure_drop >= self.THRESHOLDS["burst"]:
             return "burst"
         elif pressure_drop >= self.THRESHOLDS["high"]:
@@ -136,23 +133,9 @@ class StatisticalDetector:
 
 
 class MLLeakDetector:
-    """
-    Machine learning-based leak detector.
+    """Machine learning leak detector with hot-reload support."""
 
-    Uses Isolation Forest for anomaly detection and
-    Random Forest for leak localization and sizing.
-    """
-
-    MODEL_DIR = "data/models"
-    ISO_MODEL_FILE = "isolation_forest.joblib"
-    RF_LOCATION_FILE = "rf_location.joblib"
-    GB_SEVERITY_FILE = "gb_severity.joblib"
-    SCALER_FILE = "scaler.joblib"
-
-    FEATURES = [
-        "J1", "J2", "J3", "J4", "J5", "J6",
-        "J7", "J8", "J9", "J10", "J11", "J12",
-    ]
+    FEATURES = NODE_FEATURES
 
     def __init__(self):
         self.iso_forest: Optional[IsolationForest] = None
@@ -160,42 +143,35 @@ class MLLeakDetector:
         self.gb_severity: Optional[GradientBoostingClassifier] = None
         self.scaler: Optional[StandardScaler] = None
         self.is_trained = False
+        self._model_lock = threading.Lock()
         self._load_or_train()
 
     def _load_or_train(self):
-        """Load pre-trained models or train new ones from scratch."""
-        os.makedirs(self.MODEL_DIR, exist_ok=True)
-        iso_path = os.path.join(self.MODEL_DIR, self.ISO_MODEL_FILE)
-        scaler_path = os.path.join(self.MODEL_DIR, self.SCALER_FILE)
+        os.makedirs(MODEL_DIR, exist_ok=True)
+        iso_path = os.path.join(MODEL_DIR, ISO_MODEL_FILE)
+        scaler_path = os.path.join(MODEL_DIR, SCALER_FILE)
 
         if os.path.exists(iso_path) and os.path.exists(scaler_path):
             try:
-                self.iso_forest = joblib.load(iso_path)
-                self.scaler = joblib.load(scaler_path)
-                rf_path = os.path.join(self.MODEL_DIR, self.RF_LOCATION_FILE)
-                if os.path.exists(rf_path):
-                    self.rf_locator = joblib.load(rf_path)
-                gb_path = os.path.join(self.MODEL_DIR, self.GB_SEVERITY_FILE)
-                if os.path.exists(gb_path):
-                    self.gb_severity = joblib.load(gb_path)
-                self.is_trained = True
+                with self._model_lock:
+                    self.iso_forest = joblib.load(iso_path)
+                    self.scaler = joblib.load(scaler_path)
+                    rf_path = os.path.join(MODEL_DIR, RF_LOCATION_FILE)
+                    if os.path.exists(rf_path):
+                        self.rf_locator = joblib.load(rf_path)
+                    gb_path = os.path.join(MODEL_DIR, GB_SEVERITY_FILE)
+                    if os.path.exists(gb_path):
+                        self.gb_severity = joblib.load(gb_path)
+                    self.is_trained = True
                 logger.info("ML models loaded from disk")
                 return
             except Exception as e:
                 logger.warning(f"Model load failed: {e}")
 
         logger.info("Training ML models from EPANET-generated data...")
-        self._train_from_synthetic()
+        self._train_initial()
 
-    def _generate_training_data(self, n_samples: int = 600) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Generate the ML training dataset by running REAL EPANET hydraulic
-        solves (via WNTR's EpanetSimulator) across randomized leak locations
-        and severities on the actual Douala network topology. Falls back to
-        a calibrated approximation only if WNTR/EPANET is unavailable.
-
-        Returns: X (pressure vectors), y_location (node index), y_severity (0-3)
-        """
+    def _generate_training_data(self, n_samples: int = 600):
         from backend.epanet.simulator import EpanetSimulator
 
         sim = EpanetSimulator()
@@ -207,12 +183,7 @@ class MLLeakDetector:
             f"{'REAL EPANET 2.2 solves' if use_real else 'calibrated synthetic approximation'}..."
         )
 
-        # With real hydraulics we can safely diversify leak locations since the
-        # solver correctly propagates the effect through actual pipe topology.
-        # The synthetic fallback only has calibrated adjacency for J7.
         leak_nodes = ["J7", "J3", "J5", "J6", "J8"] if use_real else ["J7"]
-
-        # (label, min_lps, max_lps, severity_class)
         severity_bins = [
             ("normal", 0.0, 0.0, 0),
             ("small",  0.5, 2.5, 1),
@@ -251,145 +222,111 @@ class MLLeakDetector:
 
         return np.array(X), np.array(y_loc), np.array(y_sev)
 
-    def _train_from_synthetic(self):
-        """Train all ML models from generated synthetic data."""
+    def _train_initial(self):
         try:
             X, y_loc, y_sev = self._generate_training_data(600)
+            import pandas as pd
+            df = pd.DataFrame(X, columns=NODE_FEATURES)
+            df["leak_node_idx"] = y_loc
+            df["label"] = y_sev
+            df["leak_node"] = [
+                NODE_FEATURES[i] if i >= 0 else "none" for i in y_loc
+            ]
+            df["scenario"] = [
+                {0: "normal", 1: "small", 2: "medium", 3: "burst"}.get(s, "normal")
+                for s in y_sev
+            ]
 
-            self.scaler = StandardScaler()
-            X_scaled = self.scaler.fit_transform(X)
+            store = LearningStore()
+            os.makedirs("data/training", exist_ok=True)
+            df.to_csv("data/training/training_data_latest.csv", index=False)
 
-            # Isolation Forest for anomaly detection
-            self.iso_forest = IsolationForest(
-                n_estimators=100,
-                contamination=0.35,
-                random_state=42,
-            )
-            self.iso_forest.fit(X_scaled)
-
-            # Random Forest for leak localization (only on leak samples)
-            leak_mask = y_loc >= 0
-            if leak_mask.sum() > 10:
-                self.rf_locator = RandomForestRegressor(
-                    n_estimators=100,
-                    random_state=42,
-                )
-                self.rf_locator.fit(X_scaled[leak_mask], y_loc[leak_mask])
-
-            # Gradient Boosting for severity classification
-            self.gb_severity = GradientBoostingClassifier(
-                n_estimators=100,
-                random_state=42,
-            )
-            self.gb_severity.fit(X_scaled, y_sev)
-
-            # Save models
-            joblib.dump(self.iso_forest, os.path.join(self.MODEL_DIR, self.ISO_MODEL_FILE))
-            joblib.dump(self.scaler, os.path.join(self.MODEL_DIR, self.SCALER_FILE))
-            if self.rf_locator:
-                joblib.dump(self.rf_locator, os.path.join(self.MODEL_DIR, self.RF_LOCATION_FILE))
-            if self.gb_severity:
-                joblib.dump(self.gb_severity, os.path.join(self.MODEL_DIR, self.GB_SEVERITY_FILE))
-
-            self.is_trained = True
-            logger.info("ML models trained and saved successfully")
-
+            models, metrics = train_models(df)
+            save_models(models, metrics)
+            self.hot_reload(models)
+            logger.info("Initial ML models trained and saved successfully")
         except Exception as e:
             logger.error(f"ML training failed: {e}")
 
+    def hot_reload(self, models: Dict[str, Any]) -> None:
+        """Swap in freshly trained models without restarting the server."""
+        with self._model_lock:
+            self.scaler = models["scaler"]
+            self.iso_forest = models["iso_forest"]
+            self.rf_locator = models.get("rf_locator")
+            self.gb_severity = models["gb_severity"]
+            self.is_trained = True
+        logger.info("ML models hot-reloaded")
+
     def predict(self, node_pressures: Dict[str, float]) -> Dict[str, Any]:
-        """
-        Run ML inference on current pressure readings.
-        Returns: anomaly score, severity prediction, confidence.
-        """
-        if not self.is_trained or self.scaler is None:
-            return {"anomaly": False, "severity_class": 0, "confidence": 0.0}
+        with self._model_lock:
+            if not self.is_trained or self.scaler is None:
+                return {"anomaly": False, "severity_class": 0, "confidence": 0.0}
 
-        feature_vector = np.array([
-            node_pressures.get(nid, 3.0)
-            for nid in self.FEATURES
-        ]).reshape(1, -1)
+            feature_vector = np.array([
+                node_pressures.get(nid, 3.0) for nid in self.FEATURES
+            ]).reshape(1, -1)
 
-        try:
-            X_scaled = self.scaler.transform(feature_vector)
+            try:
+                X_scaled = self.scaler.transform(feature_vector)
+                iso_pred = self.iso_forest.predict(X_scaled)[0]
+                anomaly_score = self.iso_forest.score_samples(X_scaled)[0]
+                is_anomaly = iso_pred == -1
 
-            # Anomaly score (-1 = anomaly, 1 = normal)
-            iso_pred = self.iso_forest.predict(X_scaled)[0]
-            anomaly_score = self.iso_forest.score_samples(X_scaled)[0]
-            is_anomaly = iso_pred == -1
+                severity_class = 0
+                severity_proba = [1.0, 0.0, 0.0, 0.0]
+                if self.gb_severity is not None:
+                    severity_class = int(self.gb_severity.predict(X_scaled)[0])
+                    severity_proba = self.gb_severity.predict_proba(X_scaled)[0].tolist()
 
-            # Severity
-            severity_class = 0
-            severity_proba = [1.0, 0.0, 0.0, 0.0]
-            if self.gb_severity is not None:
-                severity_class = int(self.gb_severity.predict(X_scaled)[0])
-                severity_proba = self.gb_severity.predict_proba(X_scaled)[0].tolist()
+                confidence = min(100, max(0, (abs(anomaly_score) + 0.5) * 60))
 
-            # Confidence from anomaly score normalization
-            confidence = min(100, max(0, (abs(anomaly_score) + 0.5) * 60))
-
-            return {
-                "anomaly": is_anomaly,
-                "anomaly_score": float(anomaly_score),
-                "severity_class": severity_class,
-                "severity_proba": severity_proba,
-                "confidence": round(confidence, 1),
-            }
-        except Exception as e:
-            logger.error(f"ML prediction error: {e}")
-            return {"anomaly": False, "severity_class": 0, "confidence": 0.0}
+                return {
+                    "anomaly": is_anomaly,
+                    "anomaly_score": float(anomaly_score),
+                    "severity_class": severity_class,
+                    "severity_proba": severity_proba,
+                    "confidence": round(confidence, 1),
+                }
+            except Exception as e:
+                logger.error(f"ML prediction error: {e}")
+                return {"anomaly": False, "severity_class": 0, "confidence": 0.0}
 
 
 class LeakDetectionEngine:
-    """
-    Main orchestrator combining statistical + ML detection.
-    Called every simulation tick to produce LeakReport.
-    """
+    """Main orchestrator combining statistical + ML detection."""
 
     SEVERITY_LABELS = ["none", "low", "medium", "high", "burst"]
     ALERT_COLORS = {
-        "none":   "green",
-        "low":    "yellow",
-        "medium": "orange",
-        "high":   "red",
-        "burst":  "red",
+        "none": "green", "low": "yellow", "medium": "orange",
+        "high": "red", "burst": "red",
     }
-
-    # Pipe lookup from node anomaly to likely affected pipe. Node/pipe IDs
-    # (J1-J12 / P1-P18) are shared across every simulated city network, so
-    # this mapping is topology-based and works unchanged for all of them.
-    # Human-readable zone *names* are NOT hardcoded here — they're read
-    # live from each node's "name" field in the snapshot, which already
-    # reflects whichever city network (Douala, Bafoussam, ...) is active.
     NODE_TO_PIPE = {
-        "J7": "P7", "J6": "P6", "J8": "P8",
-        "J5": "P5", "J4": "P4", "J3": "P3",
-        "J2": "P2", "J1": "P1",
+        "J7": "P7", "J6": "P6", "J8": "P8", "J5": "P5", "J4": "P4",
+        "J3": "P3", "J2": "P2", "J1": "P1",
     }
 
     def __init__(self):
         self.statistical = StatisticalDetector()
         self.ml = MLLeakDetector()
+        self.learner = ContinuousLearner(self.ml)
         self.last_report: Optional[LeakReport] = None
 
     def analyze(self, snapshot_dict: Dict) -> LeakReport:
-        """
-        Full analysis pipeline: statistical + ML → combined decision.
-        """
         nodes = snapshot_dict.get("nodes", [])
         scenario = snapshot_dict.get("scenario", "normal")
 
-        # --- Statistical Analysis ---
         stat_result = self.statistical.detect(nodes)
-
-        # --- ML Analysis ---
         pressures = {n["id"]: n["pressure"] for n in nodes}
         ml_result = self.ml.predict(pressures)
 
-        # --- Combine Results ---
         zone_names = {n["id"]: n.get("name", n["id"]) for n in nodes}
         report = self._combine(stat_result, ml_result, nodes, scenario, zone_names)
         self.last_report = report
+
+        # Continuous learning: record labeled sample + maybe retrain
+        self.learner.observe(snapshot_dict, self.to_dict(report))
+
         return report
 
     def _combine(
@@ -400,13 +337,11 @@ class LeakDetectionEngine:
         scenario: str,
         zone_names: Optional[Dict[str, str]] = None,
     ) -> LeakReport:
-        """Combine statistical and ML results into a final LeakReport."""
         detected = stat.get("detected", False) or ml.get("anomaly", False)
         max_drop = stat.get("drop", 0.0)
         worst_node = stat.get("node")
         anomalies = stat.get("anomalies", [])
 
-        # Severity: take the maximum from both methods
         stat_severity = self.statistical.classify_severity(max_drop)
         ml_severity_idx = ml.get("severity_class", 0)
         ml_severity = self.SEVERITY_LABELS[min(ml_severity_idx, 4)]
@@ -420,23 +355,18 @@ class LeakDetectionEngine:
         if not detected:
             severity = "none"
 
-        # Probability — reference point (0.32 bar) is the real EPANET burst-scenario
-        # drop measured at the leak node on this specific network topology.
         REAL_BURST_REFERENCE_BAR = 0.32
         stat_prob = min(100, (max_drop / REAL_BURST_REFERENCE_BAR) * 100) if detected else 0
         ml_conf = ml.get("confidence", 0.0) if ml.get("anomaly") else 0
         probability = round((stat_prob * 0.6 + ml_conf * 0.4), 1) if detected else 0
 
-        # Location from worst node
         zone_names = zone_names or {}
         location = "No anomaly detected"
         pipe_id = None
         if worst_node:
             zone = zone_names.get(worst_node, worst_node)
-            # Get pipe segment
             pipe_id = self.NODE_TO_PIPE.get(worst_node)
             if pipe_id:
-                # Find adjacent node with a real, non-trivial pressure drop
                 for n in nodes:
                     if n["id"] != worst_node and n.get("pressure_drop", 0) > self.statistical.THRESHOLDS["low"]:
                         adj_zone = zone_names.get(n["id"], n["id"])
@@ -447,13 +377,11 @@ class LeakDetectionEngine:
             else:
                 location = f"Zone {zone} ({worst_node})"
 
-        # Estimated flow loss — linear regression fit against real EPANET solves
-        # of this network: small (1.5 L/s -> 0.026 bar), medium (4.5 -> 0.085),
-        # burst (12.0 -> 0.322). flow_loss(L/s) ≈ 34.4 * drop(bar) + 1.0
         flow_loss = round(max(0.0, 34.4 * max_drop + 1.0), 2) if detected else 0.0
-
-        # Affected nodes — any node showing a statistically real (low+) pressure drop
-        affected = [a["node_id"] for a in anomalies if a.get("pressure_drop", 0) > self.statistical.THRESHOLDS["low"]]
+        affected = [
+            a["node_id"] for a in anomalies
+            if a.get("pressure_drop", 0) > self.statistical.THRESHOLDS["low"]
+        ]
 
         return LeakReport(
             detected=detected,
@@ -473,10 +401,12 @@ class LeakDetectionEngine:
 
     def to_dict(self, report: LeakReport) -> Dict:
         d = asdict(report)
-        # Ensure all values are plain Python types for JSON serialization
         d["detected"] = bool(d["detected"])
         d["probability"] = float(d["probability"])
         d["pressure_drop"] = float(d["pressure_drop"])
         d["estimated_flow_loss"] = float(d["estimated_flow_loss"])
         d["confidence"] = float(d["confidence"])
         return d
+
+    def learning_status(self) -> Dict[str, Any]:
+        return self.learner.get_status()

@@ -657,6 +657,18 @@ class EpanetSimulator:
             "system_health": float(snapshot.system_health),
             "total_demand": float(snapshot.total_demand),
             "total_leakage": float(snapshot.total_leakage),
+            "ground_truth": self._ground_truth(snapshot.scenario),
             "nodes": [_safe_node(n) for n in snapshot.nodes],
             "pipes": [asdict(p) for p in snapshot.pipes],
+        }
+
+    def _ground_truth(self, scenario: str) -> Dict[str, Any]:
+        """Known labels for continuous ML learning (simulation ground truth)."""
+        from backend.ai.model_trainer import SCENARIO_TO_CLASS
+        cfg = self.SCENARIOS.get(scenario, self.SCENARIOS["normal"])
+        return {
+            "scenario": scenario,
+            "leak_node": cfg.get("leak_node"),
+            "leak_demand": float(cfg.get("leak_demand", 0.0)),
+            "severity_class": SCENARIO_TO_CLASS.get(scenario, 0),
         }
