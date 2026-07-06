@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
+import { ProtectedRoute } from './components/ProtectedRoute'
 import { DashboardPage } from './pages/DashboardPage'
 import { NetworkPage } from './pages/NetworkPage'
 import { PressurePage } from './pages/PressurePage'
@@ -10,7 +11,9 @@ import { ReportPage } from './pages/ReportPage'
 import { HistoryPage } from './pages/HistoryPage'
 import { IoTPage } from './pages/IoTPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { LoginPage } from './pages/LoginPage'
 import { useWebSocket } from './hooks/useWebSocket'
+import { useAuth } from './context/AuthContext'
 import { Scenario, Language } from './types'
 
 const PAGE_TITLES: Record<string, string> = {
@@ -23,18 +26,14 @@ const PAGE_TITLES: Record<string, string> = {
   '/settings': 'Settings',
 }
 
-function AppContent() {
+function DashboardLayout() {
   const location = useLocation()
-  const { isConnected, network, leakReport, lastTick, sendMessage, connectionAttempt } = useWebSocket()
+  const { isAuthenticated } = useAuth()
+  const { isConnected, network, leakReport, lastTick, sendMessage, connectionAttempt } =
+    useWebSocket(isAuthenticated)
 
   const [scenario, setScenario] = useState<Scenario>('normal')
   const [language, setLanguage] = useState<Language>('en')
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
-
-  // Track last update time
-  if (network && (!lastUpdate || lastTick > 0)) {
-    // Use ref-less update (called from render — safe because lastTick changes trigger re-render)
-  }
 
   const handleScenarioChange = useCallback((s: Scenario) => {
     setScenario(s)
@@ -111,7 +110,17 @@ function AppContent() {
 export default function App() {
   return (
     <BrowserRouter>
-      <AppContent />
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route
+          path="/*"
+          element={
+            <ProtectedRoute>
+              <DashboardLayout />
+            </ProtectedRoute>
+          }
+        />
+      </Routes>
     </BrowserRouter>
   )
 }

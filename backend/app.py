@@ -10,6 +10,7 @@ import os
 import sys
 import asyncio
 from contextlib import asynccontextmanager
+from typing import Optional
 
 # Ensure project root is on path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
@@ -26,7 +27,8 @@ from loguru import logger
 from backend.epanet.simulator import EpanetSimulator
 from backend.ai.leak_detector import LeakDetectionEngine
 from backend.ai.llm_reporter import LLMReporter
-from backend.api.routes import router, set_services
+from backend.api.routes import router, public_router, set_services
+from backend.api.auth import auth_router, verify_ws_token
 from backend.api.websocket import manager, simulation_broadcast_loop
 from backend.iot.mqtt_ingest import start_mqtt_ingest, stop_mqtt_ingest
 from backend.iot.telemetry import registry as iot_registry
@@ -117,6 +119,8 @@ app.add_middleware(
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+app.include_router(auth_router)
+app.include_router(public_router)
 app.include_router(router)
 
 
@@ -161,11 +165,15 @@ async def root():
 # ── WebSocket Endpoint ────────────────────────────────────────────────────────
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)):
     """
     Main WebSocket connection for real-time dashboard updates.
     Clients receive full network + leak analysis every 2 seconds.
     """
+    if not verify_ws_token(token):
+        await websocket.close(code=1008, reason="Authentication required")
+        return
+
     await manager.connect(websocket)
     try:
         # Send initial state immediately on connect

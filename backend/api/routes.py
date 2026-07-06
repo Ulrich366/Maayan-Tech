@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 from backend.iot.telemetry import registry as iot_registry
+from backend.api.auth import require_auth, auth_router
 
 
 def _safe_json(obj: Any) -> Any:
@@ -49,7 +50,11 @@ def set_services(simulator, detector, reporter):
     _reporter = reporter
 
 
-router = APIRouter(prefix="/api", tags=["maayan"])
+# Public routes (login + machine-to-machine IoT ingest)
+public_router = APIRouter(prefix="/api", tags=["maayan-public"])
+
+# Operator dashboard routes — require JWT when AUTH_ENABLED=true
+router = APIRouter(prefix="/api", tags=["maayan"], dependencies=[Depends(require_auth)])
 
 
 # ── Request / Response Models ──────────────────────────────────────────────────
@@ -359,7 +364,7 @@ async def get_iot_status():
     return iot_registry.status()
 
 
-@router.post("/iot/telemetry")
+@public_router.post("/iot/telemetry")
 async def ingest_iot_telemetry(
     payload: IoTTelemetryRequest,
     _: None = Depends(_verify_iot_ingest_key),

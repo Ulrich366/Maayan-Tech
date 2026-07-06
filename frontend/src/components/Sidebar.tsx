@@ -2,9 +2,10 @@ import { NavLink } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   LayoutDashboard, Network, BarChart3, FileText,
-  History, Settings, Wifi, Droplets
+  History, Settings, Wifi, Droplets, LogOut
 } from 'lucide-react'
 import { cn } from '../utils'
+import { useAuth } from '../context/AuthContext'
 
 const NAV_ITEMS = [
   { path: '/',         label: 'Dashboard',    icon: LayoutDashboard },
@@ -21,6 +22,8 @@ interface SidebarProps {
 }
 
 export function Sidebar({ collapsed = false }: SidebarProps) {
+  const { username, logout } = useAuth()
+
   return (
     <aside className={cn(
       'flex flex-col h-full bg-[#060f21] border-r border-white/[0.06] transition-all duration-300',
@@ -69,7 +72,19 @@ export function Sidebar({ collapsed = false }: SidebarProps) {
 
       {/* Footer */}
       {!collapsed && (
-        <div className="px-5 py-4 border-t border-white/[0.06]">
+        <div className="px-5 py-4 border-t border-white/[0.06] space-y-2">
+          {username && (
+            <div className="text-[10px] text-white/40 text-center truncate">
+              {username}
+            </div>
+          )}
+          <button
+            onClick={logout}
+            className="w-full flex items-center justify-center gap-2 text-[11px] text-white/40 hover:text-red-400 transition-colors py-1"
+          >
+            <LogOut size={12} />
+            Sign Out
+          </button>
           <div className="text-[10px] text-white/25 text-center">
             Maayan © 2026
           </div>

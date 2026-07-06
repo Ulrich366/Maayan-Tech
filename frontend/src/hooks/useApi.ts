@@ -4,16 +4,27 @@
 
 import { useState, useCallback } from 'react'
 import { Scenario, Language, ReportResponse, HistoryResponse, NetworkListResponse } from '../types'
+import { getToken, clearAuth } from '../lib/auth'
 
 const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL}/api`
   : 'http://localhost:8000/api'
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = getToken()
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options?.headers,
+    },
     ...options,
   })
+  if (response.status === 401) {
+    clearAuth()
+    window.location.href = '/login'
+    throw new Error('Session expired')
+  }
   if (!response.ok) {
     const error = await response.text()
     throw new Error(`API ${response.status}: ${error}`)
