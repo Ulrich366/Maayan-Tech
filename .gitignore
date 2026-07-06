@@ -1,0 +1,39 @@
+# Environment
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.db
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Logs
+logs/
+*.log
+
+# Data (generated at runtime — not source controlled)
+data/tmp/
+data/models/*.joblib
+data/training/*.csv
+
+# Stray EPANET solver temp files (should live under data/tmp/, but guard against
+# accidental root-level leftovers from interrupted solves)
+/*.bin
+/*.rpt
+/temp.inp
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
