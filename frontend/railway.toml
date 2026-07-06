@@ -1,0 +1,11 @@
+# Railway service configuration for the Maayan frontend.
+# This file lives in the frontend/ subdirectory.
+# In the Railway dashboard → frontend service → Settings → Source,
+# set "Root Directory" to "frontend" so Railway uses this directory
+# for all builds (and finds this Dockerfile automatically).
+
+[build]
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/"
