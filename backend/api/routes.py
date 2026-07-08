@@ -94,6 +94,179 @@ def _verify_iot_ingest_key(x_maayan_key: Optional[str] = Header(None)):
         raise HTTPException(401, "Invalid or missing X-Maayan-Key header")
 
 
+def _verify_flowing_points_key(x_maayan_key: Optional[str] = Header(None)):
+    """
+    Optional API key for machine-to-machine flowing-points reads.
+    Prefer FLOWING_POINTS_API_KEY; fall back to IOT_INGEST_API_KEY.
+    When neither is set, the endpoint stays open (local/dev).
+    """
+    expected = os.getenv("FLOWING_POINTS_API_KEY") or os.getenv("IOT_INGEST_API_KEY", "")
+    if expected and x_maayan_key != expected:
+        raise HTTPException(401, "Invalid or missing X-Maayan-Key header")
+
+
+def _normalize_search_text(value: str) -> str:
+    """Lowercase + strip accents for city/quarter matching."""
+    import unicodedata
+
+    normalized = unicodedata.normalize("NFKD", value or "")
+    ascii_only = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return " ".join(ascii_only.lower().split())
+
+
+def _is_node_flowing(node, leak_node_id: Optional[str]) -> bool:
+    """
+    Phase-1 flowing rule: junction is flowing when it is not the active leak
+    target and not flagged anomalous / leak / burst.
+    """
+    status = (getattr(node, "status", "") or "").lower()
+    if status in ("leak", "burst"):
+        return False
+    if bool(getattr(node, "is_anomaly", False)):
+        return False
+    if leak_node_id and node.id == leak_node_id:
+        return False
+    return True
+
+
+def _snapshot_flowing_points(city: str) -> List[Dict[str, Any]]:
+    """Build flowing-point payloads for one city without leaving it active."""
+    if _simulator is None:
+        raise HTTPException(503, "Simulator not ready")
+
+    from backend.epanet.simulator import NETWORKS
+
+    city_key = city.lower().strip()
+    if city_key not in NETWORKS:
+        raise HTTPException(400, f"Unknown network: {city}")
+
+    with _simulator._lock:
+        previous_city = _simulator.city
+        switched = False
+        if previous_city != city_key:
+            if not _simulator.set_network(city_key):
+                raise HTTPException(400, f"Unknown network: {city}")
+            switched = True
+
+        try:
+            snap = _simulator.run_simulation()
+            snap_dict = _simulator.to_json(snap)
+            gt = snap_dict.get("ground_truth") or {}
+            leak_node_id = None if snap.scenario == "normal" else gt.get("leak_node")
+
+            updated_at = datetime.utcnow().isoformat() + "Z"
+            city_label = snap_dict.get("city_label") or NETWORKS[city_key]["label"]
+            points: List[Dict[str, Any]] = []
+            for node in snap.nodes:
+                flowing = _is_node_flowing(node, leak_node_id)
+                points.append({
+                    "external_id": f"{city_key}:{node.id}",
+                    "city": city_key,
+                    "city_label": city_label,
+                    "node_id": node.id,
+                    "name": node.name,
+                    "flowing": flowing,
+                    "pressure": node.pressure,
+                    "status": node.status,
+                    "is_anomaly": bool(node.is_anomaly),
+                    "updated_at": updated_at,
+                })
+            return points
+        finally:
+            if switched and previous_city != _simulator.city:
+                _simulator.set_network(previous_city)
+
+
+def _collect_flowing_points(city: Optional[str] = None) -> List[Dict[str, Any]]:
+    from backend.epanet.simulator import NETWORKS
+
+    if city:
+        return _snapshot_flowing_points(city)
+
+    # Prefer the active city first (fast path), then switch once for the rest.
+    # Ordering keeps the lock/reloads predictable for Venda's 20-minute sync.
+    if _simulator is None:
+        raise HTTPException(503, "Simulator not ready")
+
+    ordered = [ _simulator.city ] + [
+        key for key in NETWORKS.keys() if key != _simulator.city
+    ]
+    all_points: List[Dict[str, Any]] = []
+    for city_key in ordered:
+        all_points.extend(_snapshot_flowing_points(city_key))
+    return all_points
+
+
+#
+# Public flowing-points API (Venda sync / machine clients)
+#
+
+
+@public_router.get("/flowing-points")
+async def get_flowing_points(
+    city: Optional[str] = Query(None, description="douala | bafoussam; omit for all"),
+    flowing_only: bool = Query(False, description="If true, return only flowing=true points"),
+    _: None = Depends(_verify_flowing_points_key),
+):
+    """
+    Read-only junction list with a phase-1 flowing flag for WhatsApp / sync clients.
+    Does not alter leak detection or dashboard behavior beyond a brief city switch
+    when a non-active city is requested (restored afterwards).
+    """
+    points = _collect_flowing_points(city)
+    if flowing_only:
+        points = [p for p in points if p.get("flowing")]
+    return JSONResponse(content=_safe_json({
+        "count": len(points),
+        "points": points,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+    }))
+
+
+@public_router.get("/flowing-points/search")
+async def search_flowing_points(
+    q: str = Query(..., min_length=1, description="City or quarter name substring"),
+    flowing_only: bool = Query(True, description="Default true: only flowing points"),
+    limit: int = Query(5, ge=1, le=50),
+    _: None = Depends(_verify_flowing_points_key),
+):
+    """Case-insensitive match on city id, city label, or quarter name."""
+    needle = _normalize_search_text(q)
+    if not needle:
+        raise HTTPException(400, "Query q is required")
+
+    points = _collect_flowing_points(None)
+    matches: List[Dict[str, Any]] = []
+    for point in points:
+        if flowing_only and not point.get("flowing"):
+            continue
+        haystacks = [
+            _normalize_search_text(str(point.get("city") or "")),
+            _normalize_search_text(str(point.get("city_label") or "")),
+            _normalize_search_text(str(point.get("name") or "")),
+            _normalize_search_text(str(point.get("node_id") or "")),
+        ]
+        if any(needle in h or h in needle for h in haystacks if h):
+            matches.append(point)
+
+    # Prefer exact quarter name matches first
+    def sort_key(p: Dict[str, Any]):
+        name_n = _normalize_search_text(str(p.get("name") or ""))
+        city_n = _normalize_search_text(str(p.get("city") or ""))
+        exact = 0 if name_n == needle else (1 if needle in name_n else 2)
+        city_boost = 0 if city_n == needle or needle in city_n else 1
+        return (exact, city_boost, name_n)
+
+    matches.sort(key=sort_key)
+    trimmed = matches[:limit]
+    return JSONResponse(content=_safe_json({
+        "query": q,
+        "count": len(trimmed),
+        "points": trimmed,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+    }))
+
+
 # ── Network Endpoints ──────────────────────────────────────────────────────────
 
 @router.get("/network")

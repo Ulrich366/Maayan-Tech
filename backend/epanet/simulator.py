@@ -282,7 +282,8 @@ class EpanetSimulator:
         self.engine = "synthetic"
         self.baseline_pressures: Dict[str, float] = dict(self.network_def.FALLBACK_BASELINE_PRESSURES)
         self._tmp_dir = os.path.join("data", "tmp")
-        self._lock = threading.Lock()
+        # RLock: API helpers may hold the lock while calling run_simulation()
+        self._lock = threading.RLock()
         self._run_counter = 0
         self._inp_mtime: Optional[float] = None
         os.makedirs(self._tmp_dir, exist_ok=True)
