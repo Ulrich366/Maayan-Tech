@@ -5,10 +5,9 @@
 import { useState, useCallback } from 'react'
 import { Scenario, Language, ReportResponse, HistoryResponse, NetworkListResponse } from '../types'
 import { getToken, clearAuth } from '../lib/auth'
+import { getApiBase } from '../lib/apiBase'
 
-const API_BASE = import.meta.env.VITE_API_URL
-  ? `${import.meta.env.VITE_API_URL}/api`
-  : 'http://localhost:8000/api'
+const API_BASE = getApiBase()
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getToken()

@@ -6,15 +6,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { WsMessage, NetworkSnapshot, LeakReport } from '../types'
 import { getToken } from '../lib/auth'
+import { getWsUrl } from '../lib/apiBase'
 
-function buildWsUrl(token: string | null): string {
-  const base = import.meta.env.VITE_WS_URL
-    ? `${import.meta.env.VITE_WS_URL}/ws`
-    : 'ws://localhost:8000/ws'
-  if (!token) return base
-  const sep = base.includes('?') ? '&' : '?'
-  return `${base}${sep}token=${encodeURIComponent(token)}`
-}
+const WS_URL = getWsUrl()
 
 const RECONNECT_DELAY = 3000
 const MAX_RECONNECT_ATTEMPTS = 10
@@ -66,7 +60,8 @@ export function useWebSocket(enabled = true): UseWebSocketReturn {
     if (!token) return
 
     try {
-      const socket = new WebSocket(buildWsUrl(token))
+      const sep = WS_URL.includes('?') ? '&' : '?'
+      const socket = new WebSocket(`${WS_URL}${sep}token=${encodeURIComponent(token)}`)
       ws.current = socket
 
       socket.onopen = () => {
