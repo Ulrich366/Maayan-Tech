@@ -301,6 +301,17 @@ Hardware per node:
 
 ---
 
+## Production Deployment
+
+Live on **GERCAM Railway** — see [DEPLOY.md](DEPLOY.md) for URLs, credentials, and service configuration.
+
+| | URL |
+|---|---|
+| Dashboard | https://frontend-production-0540.up.railway.app |
+| API | https://backend-production-357a.up.railway.app |
+
+---
+
 ## Environment Variables
 
 | Variable | Default | Description |
